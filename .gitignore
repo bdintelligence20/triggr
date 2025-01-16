@@ -1,23 +1,24 @@
-# Python-related
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Environment variables
-.env
-
-# Virtual environment
-env/
-venv/
-*.env
-
-# Uploads and temporary files
-uploads/
-
 # Logs
+logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
-# Codespaces-related
-.vscode/
-.devcontainer/
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
