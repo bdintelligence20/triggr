@@ -3,7 +3,6 @@ from flask_cors import CORS
 import os
 import requests
 from dotenv import load_dotenv
-import openai
 from twilio.rest import Client
 
 # Load environment variables
@@ -12,9 +11,6 @@ load_dotenv()
 # Initialize Flask app
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
-
-# Initialize OpenAI API
-openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # Initialize Twilio client
 twilio_client = Client(
@@ -26,23 +22,34 @@ UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "./uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Ensure required environment variables are set
-if not openai.api_key:
+if not os.getenv("OPENAI_API_KEY"):
     raise EnvironmentError("OPENAI_API_KEY is not set in the environment")
 
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+HEADERS = {
+    "Authorization": f"Bearer {OPENAI_API_KEY}",
+    "Content-Type": "application/json",
+    "OpenAI-Beta": "assistants=v2"
+}
 
 @app.route("/", methods=["GET"])
 def home():
     return "Backend is running with CORS enabled!"
 
-
 @app.route("/create-vector-store", methods=["POST"])
 def create_vector_store():
     try:
-        vector_store = openai.VectorStore.create(name="MyVectorStore")
-        return jsonify({"message": "Vector store created!", "id": vector_store.id})
+        response = requests.post(
+            "https://api.openai.com/v1/vector_stores",
+            headers=HEADERS,
+            json={"name": "MyVectorStore"}
+        )
+        if response.status_code != 200:
+            return jsonify({"error": response.json()}), response.status_code
+
+        return jsonify({"message": "Vector store created!", "id": response.json()["id"]})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 
 @app.route("/upload-files", methods=["POST"])
 def upload_files():
@@ -57,12 +64,9 @@ def upload_files():
 
         file_ids = []
         for file in files:
-            # Step 1: Upload file to OpenAI
             upload_response = requests.post(
                 "https://api.openai.com/v1/files",
-                headers={
-                    "Authorization": f"Bearer {openai.api_key}"
-                },
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
                 files={"file": (file.filename, file.stream)},
                 data={"purpose": "assistants"}
             )
@@ -72,15 +76,10 @@ def upload_files():
             file_id = upload_response.json()["id"]
             file_ids.append(file_id)
 
-        # Step 2: Attach files to vector store
         for file_id in file_ids:
             attach_response = requests.post(
                 f"https://api.openai.com/v1/vector_stores/{vector_store_id}/files",
-                headers={
-                    "Authorization": f"Bearer {openai.api_key}",
-                    "Content-Type": "application/json",
-                    "OpenAI-Beta": "assistants=v2"
-                },
+                headers=HEADERS,
                 json={"file_id": file_id}
             )
             if attach_response.status_code != 200:
@@ -90,48 +89,46 @@ def upload_files():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-@app.route("/query-assistant", methods=["POST"])
-def query_assistant():
-    try:
-        data = request.get_json()
-        query = data.get("query")
-        assistant_id = data.get("assistant_id", "asst_uFDXSPAmDTPShC92EDlwCtBz")  # Default to provided ID
-
-        response = openai.AssistantCompletion.create(
-            assistant_id=assistant_id,
-            input=query
-        )
-        return jsonify({"response": response["choices"][0]["message"]["content"]})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_webhook():
     try:
         from_number = request.form.get("From")
         body = request.form.get("Body")
 
-        # Query the assistant
-        response = openai.AssistantCompletion.create(
-            assistant_id="asst_uFDXSPAmDTPShC92EDlwCtBz",
-            input=body
+        # Create a thread if necessary
+        thread_response = requests.post(
+            "https://api.openai.com/v1/threads",
+            headers=HEADERS,
+            json={"assistant_id": "asst_uFDXSPAmDTPShC92EDlwCtBz"}
         )
-        assistant_response = response["choices"][0]["message"]["content"]
 
-        # Send the response back to WhatsApp
+        if thread_response.status_code != 200:
+            return jsonify({"error": "Failed to create thread"}), 500
+
+        thread_id = thread_response.json()["id"]
+
+        # Send the user's message
+        message_response = requests.post(
+            f"https://api.openai.com/v1/threads/{thread_id}/messages",
+            headers=HEADERS,
+            json={"role": "user", "content": body}
+        )
+
+        if message_response.status_code != 200:
+            return jsonify({"error": "Failed to send message to assistant"}), 500
+
+        assistant_response_content = message_response.json()["content"][0]["text"]["value"]
+
+        # Send the assistant's response back via WhatsApp
         twilio_client.messages.create(
             to=from_number,
             from_=os.getenv("TWILIO_WHATSAPP_NUMBER"),
-            body=assistant_response
+            body=assistant_response_content
         )
+
         return "OK", 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-
 if __name__ == "__main__":
-    # Bind to 0.0.0.0 and use the PORT environment variable for Render compatibility
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
