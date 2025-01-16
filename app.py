@@ -99,57 +99,77 @@ def whatsapp_webhook():
         thread_response = requests.post(
             "https://api.openai.com/v1/threads",
             headers=HEADERS,
-            json={}  # Create thread without unnecessary parameters
+            json={}
         )
-
-        if thread_response.status_code != 200:
-            error_message = thread_response.json().get("error", {}).get("message", "Unknown error during thread creation")
-            return jsonify({"error": f"Failed to create thread: {error_message}"}), 500
-
+        thread_response.raise_for_status()
         thread_id = thread_response.json()["id"]
 
-        # Step 2: Send the user's message
+        # Step 2: Send user's message to the thread
         message_response = requests.post(
             f"https://api.openai.com/v1/threads/{thread_id}/messages",
             headers=HEADERS,
             json={"role": "user", "content": body}
         )
+        message_response.raise_for_status()
 
-        if message_response.status_code != 200:
-            error_message = message_response.json().get("error", {}).get("message", "Unknown error during message creation")
-            return jsonify({"error": f"Failed to send message to assistant: {error_message}"}), 500
-
-        # Step 3: Run the assistant for this thread
+        # Step 3: Run the assistant
         run_response = requests.post(
             f"https://api.openai.com/v1/threads/{thread_id}/runs",
             headers=HEADERS,
-            json={"assistant_id": "asst_uFDXSPAmDTPShC92EDlwCtBz"}
+            json={
+                "assistant_id": "asst_uFDXSPAmDTPShC92EDlwCtBz",
+                "tools": [
+                    {
+                        "type": "file_search",
+                        "file_search": {
+                            "vector_store_id": "vs_R5HLAebBXbIv8MX7bsE9Gjzk",
+                            "ranking_options": {
+                                "ranker": "default_2024_08_21",
+                                "score_threshold": 0.0
+                            }
+                        }
+                    }
+                ]
+            }
         )
+        run_response.raise_for_status()
+        run_id = run_response.json()["id"]
 
-        if run_response.status_code != 200:
-            error_message = run_response.json().get("error", {}).get("message", "Unknown error during assistant run")
-            return jsonify({"error": f"Failed to get assistant response: {error_message}"}), 500
+        # Step 4: Poll for the run results
+        poll_interval = 2
+        max_attempts = 10
+        attempts = 0
+        while attempts < max_attempts:
+            time.sleep(poll_interval)
+            run_status_response = requests.get(
+                f"https://api.openai.com/v1/threads/{thread_id}/runs/{run_id}",
+                headers=HEADERS
+            )
+            run_status_response.raise_for_status()
+            run_status = run_status_response.json()["status"]
 
-        # Debug: Log the full response from the run endpoint
-        print("Run Response:", run_response.json())
+            if run_status == "completed":
+                break
+            elif run_status == "failed":
+                return jsonify({"error": "Assistant run failed"}), 500
 
-        # Extract the assistant's response
-        if "results" not in run_response.json():
-            return jsonify({"error": "'results' key missing in run response", "response": run_response.json()}), 500
+            attempts += 1
 
-        assistant_message = run_response.json()["results"]["messages"][-1]["content"]
+        if run_status != "completed":
+            return jsonify({"error": "Assistant run timed out"}), 500
 
-        # Step 4: Send the assistant's response back to WhatsApp
+        assistant_response_content = run_status_response.json()["results"]["messages"][-1]["content"]
+
+        # Step 5: Send the assistant's response back via WhatsApp
         twilio_client.messages.create(
             to=from_number,
             from_=os.getenv("TWILIO_WHATSAPP_NUMBER"),
-            body=assistant_message
+            body=assistant_response_content
         )
 
         return "OK", 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
