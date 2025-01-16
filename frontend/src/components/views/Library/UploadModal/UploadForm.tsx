@@ -16,11 +16,36 @@ const UploadForm = ({ onClose }: UploadFormProps) => {
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Handle file upload here
-    console.log('Uploading files:', files);
-    onClose();
+
+    if (files.length === 0) return;
+
+    const formData = new FormData();
+    formData.append('vector_store_id', 'vs_R5HLAebBXbIv8MX7bsE9Gjzk'); // Replace with the correct ID
+    files.forEach(file => formData.append('files', file));
+
+    try {
+      const response = await fetch('https://triggr.onrender.com/upload-files', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        console.error('Upload failed:', error);
+        alert(`Error: ${error.error}`);
+        return;
+      }
+
+      const result = await response.json();
+      console.log('Files uploaded successfully:', result);
+      alert('Files uploaded successfully!');
+      onClose();
+    } catch (error) {
+      console.error('Error uploading files:', error);
+      alert('An unexpected error occurred. Please try again.');
+    }
   };
 
   return (
