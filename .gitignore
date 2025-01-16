@@ -1,0 +1,23 @@
+# Python-related
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables
+.env
+
+# Virtual environment
+env/
+venv/
+*.env
+
+# Uploads and temporary files
+uploads/
+
+# Logs
+*.log
+
+# Codespaces-related
+.vscode/
+.devcontainer/
