@@ -40,7 +40,6 @@ def create_vector_store():
         return jsonify({"error": str(e)}), 500
 
 
-# Route to upload files and convert to vector store
 @app.route("/upload-files", methods=["POST"])
 def upload_files():
     try:
@@ -56,14 +55,15 @@ def upload_files():
 
         file_ids = []
         for file in files:
-            # Upload each file to OpenAI and retrieve the file ID
-            file_upload_response = openai.File.create(
-                file=file.stream,
-                purpose="vector_search"
-            )
-            file_ids.append(file_upload_response["id"])
+            # Upload each file using the updated OpenAI API
+            with file.stream as f:
+                response = openai.upload_file(
+                    file=f,
+                    purpose="search"  # Or "search" depending on the purpose
+                )
+                file_ids.append(response["id"])
 
-        # Attach uploaded files to the vector store
+        # Attach files to the vector store
         for file_id in file_ids:
             openai.VectorStoreFile.create(
                 vector_store_id=vector_store_id,
@@ -73,6 +73,7 @@ def upload_files():
         return jsonify({"message": "Files uploaded and attached to vector store successfully!"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 
 
