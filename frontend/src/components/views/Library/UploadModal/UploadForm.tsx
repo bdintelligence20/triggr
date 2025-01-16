@@ -2,6 +2,7 @@ import React, { useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import DropZone from './DropZone';
 import FilePreview from './FilePreview';
+import { useFileStore } from '../store/useFileStore';
 
 interface UploadFormProps {
   onClose: () => void;
@@ -9,6 +10,7 @@ interface UploadFormProps {
 
 const UploadForm = ({ onClose }: UploadFormProps) => {
   const [files, setFiles] = React.useState<File[]>([]);
+  const addFiles = useFileStore(state => state.addFiles);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     setFiles(prev => [...prev, ...acceptedFiles]);
@@ -22,7 +24,7 @@ const UploadForm = ({ onClose }: UploadFormProps) => {
     if (files.length === 0) return;
 
     const formData = new FormData();
-    formData.append('vector_store_id', 'vs_R5HLAebBXbIv8MX7bsE9Gjzk'); // Replace with the correct ID
+    formData.append('vector_store_id', 'vs_R5HLAebBXbIv8MX7bsE9Gjzk');
     files.forEach(file => formData.append('files', file));
 
     try {
@@ -39,6 +41,20 @@ const UploadForm = ({ onClose }: UploadFormProps) => {
       }
 
       const result = await response.json();
+      
+      // Convert uploaded files to LibraryItem format
+      const newLibraryItems = files.map(file => ({
+        id: Math.random().toString(36).substr(2, 9),
+        name: file.name,
+        type: 'file' as const,
+        size: `${(file.size / 1024 / 1024).toFixed(2)} MB`,
+        owner: 'You',
+        lastModified: new Date().toISOString(),
+      }));
+
+      // Add the new files to the store
+      addFiles(newLibraryItems);
+      
       console.log('Files uploaded successfully:', result);
       alert('Files uploaded successfully!');
       onClose();

@@ -1,15 +1,16 @@
 import React, { useState } from 'react';
 import { File, Folder, Download } from 'lucide-react';
-import { LibraryItem } from '../../types';
+import { LibraryItem } from '../store/useFileStore';
+import { useFileStore } from '../store/useFileStore';
 import FileActionsMenu from './FileActions/FileActionsMenu';
 import DeleteConfirmationDialog from './FileActions/DeleteConfirmationDialog';
 import RenameDialog from './FileActions/RenameDialog';
 
-interface FileListProps {
-  items: LibraryItem[];
-}
-
-const FileList = ({ items }: FileListProps) => {
+const FileList = () => {
+  const files = useFileStore(state => state.files);
+  const removeFile = useFileStore(state => state.removeFile);
+  const renameFile = useFileStore(state => state.renameFile);
+  
   const [itemToDelete, setItemToDelete] = useState<LibraryItem | null>(null);
   const [itemToRename, setItemToRename] = useState<LibraryItem | null>(null);
 
@@ -23,15 +24,13 @@ const FileList = ({ items }: FileListProps) => {
 
   const confirmDelete = () => {
     if (!itemToDelete) return;
-    // Implement delete logic here
-    console.log('Deleting:', itemToDelete.name);
+    removeFile(itemToDelete.id);
     setItemToDelete(null);
   };
 
   const confirmRename = (newName: string) => {
     if (!itemToRename) return;
-    // Implement rename logic here
-    console.log('Renaming:', itemToRename.name, 'to:', newName);
+    renameFile(itemToRename.id, newName);
     setItemToRename(null);
   };
 
@@ -59,7 +58,7 @@ const FileList = ({ items }: FileListProps) => {
         </div>
       </div>
       
-      {items.map((item) => (
+      {files.map((item) => (
         <div 
           key={item.id}
           className="grid grid-cols-12 gap-4 p-3 hover:bg-gray-50 items-center text-sm border-b border-gray-100 last:border-none"
