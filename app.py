@@ -99,7 +99,7 @@ def whatsapp_webhook():
         thread_response = requests.post(
             "https://api.openai.com/v1/threads",
             headers=HEADERS,
-            json={}  # Thread creation may not need assistant_id directly
+            json={"title": "WhatsApp Interaction"}
         )
 
         if thread_response.status_code != 200:
@@ -108,33 +108,41 @@ def whatsapp_webhook():
 
         thread_id = thread_response.json()["id"]
 
-        # Step 2: Send the user's message, referencing the assistant
+        # Step 2: Send the user's message
         message_response = requests.post(
             f"https://api.openai.com/v1/threads/{thread_id}/messages",
             headers=HEADERS,
-            json={
-                "role": "user",
-                "content": body,
-                "metadata": {"assistant_id": "asst_uFDXSPAmDTPShC92EDlwCtBz"}  # Include assistant ID in metadata
-            }
+            json={"role": "user", "content": body}
         )
 
         if message_response.status_code != 200:
             error_message = message_response.json().get("error", {}).get("message", "Unknown error during message creation")
             return jsonify({"error": f"Failed to send message to assistant: {error_message}"}), 500
 
-        assistant_response_content = message_response.json()["content"][0]["text"]["value"]
+        # Step 3: Run the assistant for this thread
+        run_response = requests.post(
+            f"https://api.openai.com/v1/threads/{thread_id}/runs",
+            headers=HEADERS,
+            json={"assistant_id": "asst_uFDXSPAmDTPShC92EDlwCtBz"}
+        )
 
-        # Step 3: Send the assistant's response back to WhatsApp
+        if run_response.status_code != 200:
+            error_message = run_response.json().get("error", {}).get("message", "Unknown error during assistant run")
+            return jsonify({"error": f"Failed to get assistant response: {error_message}"}), 500
+
+        assistant_message = run_response.json()["results"]["messages"][-1]["content"]
+
+        # Step 4: Send the assistant's response back to WhatsApp
         twilio_client.messages.create(
             to=from_number,
             from_=os.getenv("TWILIO_WHATSAPP_NUMBER"),
-            body=assistant_response_content
+            body=assistant_message
         )
 
         return "OK", 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 
 if __name__ == "__main__":
