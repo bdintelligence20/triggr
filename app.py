@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
+import requests
 from dotenv import load_dotenv
 import openai
 from twilio.rest import Client
@@ -24,13 +25,16 @@ twilio_client = Client(
 UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "./uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+# Ensure required environment variables are set
+if not openai.api_key:
+    raise EnvironmentError("OPENAI_API_KEY is not set in the environment")
+
 
 @app.route("/", methods=["GET"])
 def home():
     return "Backend is running with CORS enabled!"
 
 
-# Route to create a vector store
 @app.route("/create-vector-store", methods=["POST"])
 def create_vector_store():
     try:
@@ -43,45 +47,55 @@ def create_vector_store():
 @app.route("/upload-files", methods=["POST"])
 def upload_files():
     try:
-        # Get vector store ID from the request
         vector_store_id = request.form.get("vector_store_id")
         if not vector_store_id:
             return jsonify({"error": "Vector store ID is required"}), 400
 
-        # Get files from the request
         files = request.files.getlist("files")
         if not files:
             return jsonify({"error": "No files provided"}), 400
 
         file_ids = []
         for file in files:
-            # Upload each file using OpenAI's file API
-            response = openai.File.create(
-                file=file,
-                purpose="search"  # Set the purpose (e.g., "search" or "fine-tune")
+            # Step 1: Upload file to OpenAI
+            upload_response = requests.post(
+                "https://api.openai.com/v1/files",
+                headers={
+                    "Authorization": f"Bearer {openai.api_key}"
+                },
+                files={"file": (file.filename, file.stream)},
+                data={"purpose": "search"}
             )
-            file_ids.append(response["id"])
+            if upload_response.status_code != 200:
+                return jsonify({"error": f"Failed to upload file: {upload_response.json()}"}), 500
 
-        # Attach files to the vector store
+            file_id = upload_response.json()["id"]
+            file_ids.append(file_id)
+
+        # Step 2: Attach files to vector store
         for file_id in file_ids:
-            openai.VectorStoreFile.create(
-                vector_store_id=vector_store_id,
-                file_id=file_id
+            attach_response = requests.post(
+                f"https://api.openai.com/v1/vector_stores/{vector_store_id}/files",
+                headers={
+                    "Authorization": f"Bearer {openai.api_key}",
+                    "Content-Type": "application/json",
+                    "OpenAI-Beta": "assistants=v2"
+                },
+                json={"file_id": file_id}
             )
+            if attach_response.status_code != 200:
+                return jsonify({"error": f"Failed to attach file to vector store: {attach_response.json()}"}), 500
 
-        return jsonify({"message": "Files uploaded and attached to vector store successfully!"})
+        return jsonify({"message": "Files uploaded and attached to vector store successfully!"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-
-
-# Route to query the assistant
 @app.route("/query-assistant", methods=["POST"])
 def query_assistant():
     try:
         data = request.get_json()
-        query = data["query"]
+        query = data.get("query")
         assistant_id = data.get("assistant_id", "asst_uFDXSPAmDTPShC92EDlwCtBz")  # Default to provided ID
 
         response = openai.AssistantCompletion.create(
@@ -93,7 +107,6 @@ def query_assistant():
         return jsonify({"error": str(e)}), 500
 
 
-# WhatsApp webhook for querying the assistant
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_webhook():
     try:
