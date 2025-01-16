@@ -114,20 +114,22 @@ def whatsapp_webhook():
         body = request.form.get("Body")
 
         # Query the assistant
-        assistant_response = query_assistant({
-            "query": body,
-            "assistant_id": "asst_uFDXSPAmDTPShC92EDlwCtBz"
-        })
+        response = openai.AssistantCompletion.create(
+            assistant_id="asst_uFDXSPAmDTPShC92EDlwCtBz",
+            input=body
+        )
+        assistant_response = response["choices"][0]["message"]["content"]
 
         # Send the response back to WhatsApp
         twilio_client.messages.create(
             to=from_number,
             from_=os.getenv("TWILIO_WHATSAPP_NUMBER"),
-            body=assistant_response.json["response"]
+            body=assistant_response
         )
         return "OK", 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 
 if __name__ == "__main__":
