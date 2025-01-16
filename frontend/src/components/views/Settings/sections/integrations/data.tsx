@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import { MessageSquare, Cloud, Mail, Building, BarChart3, Users, Database, FolderGit2 } from 'lucide-react';
 
 export const integrations = [

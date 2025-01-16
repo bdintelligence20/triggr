@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import { Calendar, User, ArrowLeft, Edit, Users, ExternalLink } from 'lucide-react';
 import HubMetrics from './sections/HubMetrics';
 

@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import BarChart from './charts/BarChart';
 import LineChart from './charts/LineChart';
 import DonutChart from './charts/DonutChart';

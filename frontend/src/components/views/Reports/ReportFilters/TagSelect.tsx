@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 
 const TagSelect = () => {
   const tags = ['HR', 'Operations', 'H&S', 'Damage', 'Training'];

@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import { Calendar, Link as LinkIcon, AlertCircle, Users } from 'lucide-react';
 
 interface HubDetailsSectionProps {

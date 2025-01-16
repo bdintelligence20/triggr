@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import CloudStorageProvider from './CloudStorageProvider';
 import FolderBrowser from './FolderBrowser';
 import SyncStatus from './SyncStatus';

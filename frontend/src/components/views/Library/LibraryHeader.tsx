@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import { Search, Plus, Cloud, Files, Users } from 'lucide-react';
 
 interface LibraryHeaderProps {

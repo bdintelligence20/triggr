@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import WelcomeBanner from './WelcomeBanner';
 import ChartFilters from './ChartFilters';
 import ActivitySummary from './ActivitySummary';

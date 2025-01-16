@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import { Building, Users, CreditCard, Lock, Cable } from 'lucide-react';
 
 const settingsSections = [

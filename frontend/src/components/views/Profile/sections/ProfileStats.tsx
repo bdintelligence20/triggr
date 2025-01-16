@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import { FileText, MessageSquare } from 'lucide-react';
 
 interface ProfileStatsProps {

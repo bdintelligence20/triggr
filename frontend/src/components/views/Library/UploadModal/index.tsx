@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import { X } from 'lucide-react';
 import UploadForm from './UploadForm';
 

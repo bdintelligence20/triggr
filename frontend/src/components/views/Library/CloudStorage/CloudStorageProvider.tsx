@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import { Cloud, Check } from 'lucide-react';
 
 interface Provider {

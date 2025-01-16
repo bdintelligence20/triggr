@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import { AlertCircle, Clock, CheckCircle } from 'lucide-react';
 
 const priorityItems = [

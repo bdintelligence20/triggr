@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import { MoreVertical, Pencil, Trash2 } from 'lucide-react';
 import { LibraryItem } from '../../../types';
 

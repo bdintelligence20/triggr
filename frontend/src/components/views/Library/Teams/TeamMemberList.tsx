@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import { MoreVertical, Edit2, Trash2 } from 'lucide-react';
 
 interface TeamMember {

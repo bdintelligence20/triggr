@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import { Bot, User, MessageSquare, FileText, CheckCircle, Clock } from 'lucide-react';
 import { ChatThread } from '../types';
 

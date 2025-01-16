@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import { Bell, Globe } from 'lucide-react';
 
 interface ProfileSettingsProps {

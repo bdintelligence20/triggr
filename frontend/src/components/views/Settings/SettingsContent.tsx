@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import OrganizationSettings from './sections/OrganizationSettings';
 import AccountsSettings from './sections/AccountsSettings';
 import BillingSettings from './sections/BillingSettings';

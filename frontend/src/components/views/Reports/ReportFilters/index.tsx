@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import DateRangeSelect from './DateRangeSelect';
 import TagSelect from './TagSelect';
 import HubSelect from './HubSelect';

@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import RequestsList from './RequestsList';
 import ReportsList from './ReportsList';
 

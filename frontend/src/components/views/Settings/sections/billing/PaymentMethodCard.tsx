@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import { CreditCard, Edit2 } from 'lucide-react';
 
 interface PaymentMethodCardProps {

@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import { MessageSquare } from 'lucide-react';
 
 const demoRequests = [

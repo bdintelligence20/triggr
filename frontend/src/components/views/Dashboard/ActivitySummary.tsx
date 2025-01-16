@@ -1,4 +1,5 @@
-import React from 'react';
+import * as React from "react";
+
 import { Activity, FileText, MessageSquare, Users } from 'lucide-react';
 
 const metrics = [
