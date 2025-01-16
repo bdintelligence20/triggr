@@ -64,7 +64,7 @@ def upload_files():
                     "Authorization": f"Bearer {openai.api_key}"
                 },
                 files={"file": (file.filename, file.stream)},
-                data={"purpose": "search"}
+                data={"purpose": "assistants"}
             )
             if upload_response.status_code != 200:
                 return jsonify({"error": f"Failed to upload file: {upload_response.json()}"}), 500
