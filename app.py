@@ -130,6 +130,13 @@ def whatsapp_webhook():
             error_message = run_response.json().get("error", {}).get("message", "Unknown error during assistant run")
             return jsonify({"error": f"Failed to get assistant response: {error_message}"}), 500
 
+        # Debug: Log the full response from the run endpoint
+        print("Run Response:", run_response.json())
+
+        # Extract the assistant's response
+        if "results" not in run_response.json():
+            return jsonify({"error": "'results' key missing in run response", "response": run_response.json()}), 500
+
         assistant_message = run_response.json()["results"]["messages"][-1]["content"]
 
         # Step 4: Send the assistant's response back to WhatsApp
@@ -142,7 +149,6 @@ def whatsapp_webhook():
         return "OK", 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 
 
 if __name__ == "__main__":
