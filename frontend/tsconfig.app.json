@@ -16,6 +16,7 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true,
+    "allowSyntheticDefaultImports": true,
     "noUncheckedSideEffectImports": false
   },
   "include": ["src"]
