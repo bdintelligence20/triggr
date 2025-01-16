@@ -95,33 +95,37 @@ def whatsapp_webhook():
         from_number = request.form.get("From")
         body = request.form.get("Body")
 
-        # Create a thread
+        # Step 1: Create a new thread
         thread_response = requests.post(
             "https://api.openai.com/v1/threads",
             headers=HEADERS,
-            json={"assistant_id": "asst_uFDXSPAmDTPShC92EDlwCtBz"}
+            json={}  # Thread creation may not need assistant_id directly
         )
 
         if thread_response.status_code != 200:
-            error_message = thread_response.json().get("error", "Unknown error during thread creation")
+            error_message = thread_response.json().get("error", {}).get("message", "Unknown error during thread creation")
             return jsonify({"error": f"Failed to create thread: {error_message}"}), 500
 
         thread_id = thread_response.json()["id"]
 
-        # Send the user's message
+        # Step 2: Send the user's message, referencing the assistant
         message_response = requests.post(
             f"https://api.openai.com/v1/threads/{thread_id}/messages",
             headers=HEADERS,
-            json={"role": "user", "content": body}
+            json={
+                "role": "user",
+                "content": body,
+                "metadata": {"assistant_id": "asst_uFDXSPAmDTPShC92EDlwCtBz"}  # Include assistant ID in metadata
+            }
         )
 
         if message_response.status_code != 200:
-            error_message = message_response.json().get("error", "Unknown error during message creation")
+            error_message = message_response.json().get("error", {}).get("message", "Unknown error during message creation")
             return jsonify({"error": f"Failed to send message to assistant: {error_message}"}), 500
 
         assistant_response_content = message_response.json()["content"][0]["text"]["value"]
 
-        # Send the assistant's response back via WhatsApp
+        # Step 3: Send the assistant's response back to WhatsApp
         twilio_client.messages.create(
             to=from_number,
             from_=os.getenv("TWILIO_WHATSAPP_NUMBER"),
