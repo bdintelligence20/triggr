@@ -44,30 +44,36 @@ def create_vector_store():
 @app.route("/upload-files", methods=["POST"])
 def upload_files():
     try:
-        # Extract vector store ID if provided
-        vector_store_id = request.form.get("vector_store_id", "vs_R5HLAebBXbIv8MX7bsE9Gjzk")  # Default to provided ID
-        files = request.files.getlist("files")
+        # Get vector store ID from the request
+        vector_store_id = request.form.get("vector_store_id")
+        if not vector_store_id:
+            return jsonify({"error": "Vector store ID is required"}), 400
 
+        # Get files from the request
+        files = request.files.getlist("files")
         if not files:
             return jsonify({"error": "No files provided"}), 400
 
-        uploaded_files = []
-
-        # Save files locally
+        file_ids = []
         for file in files:
-            filepath = os.path.join(UPLOAD_FOLDER, file.filename)
-            file.save(filepath)
-            uploaded_files.append(filepath)
+            # Upload each file to OpenAI and retrieve the file ID
+            file_upload_response = openai.File.create(
+                file=file.stream,
+                purpose="vector_search"
+            )
+            file_ids.append(file_upload_response["id"])
 
-        # Convert files to vector stores if vector_store_id is provided
-        file_streams = [open(file, "rb") for file in uploaded_files]
-        file_batch = openai.VectorStoreFileBatch.upload_and_poll(
-            vector_store_id=vector_store_id,
-            files=file_streams
-        )
-        return jsonify({"message": "Files uploaded and converted to vector store!", "batch_id": file_batch.id}), 200
+        # Attach uploaded files to the vector store
+        for file_id in file_ids:
+            openai.VectorStoreFile.create(
+                vector_store_id=vector_store_id,
+                file_id=file_id
+            )
+
+        return jsonify({"message": "Files uploaded and attached to vector store successfully!"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 
 # Route to query the assistant
