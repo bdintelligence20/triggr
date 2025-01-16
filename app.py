@@ -113,27 +113,32 @@ def whatsapp_webhook():
         message_response.raise_for_status()
 
         # Step 3: Run the assistant
+        run_payload = {
+            "assistant_id": "asst_uFDXSPAmDTPShC92EDlwCtBz",
+            "tools": [
+                {
+                    "type": "file_search",
+                    "file_search": {
+                        "vector_store_id": "vs_R5HLAebBXbIv8MX7bsE9Gjzk",
+                        "ranking_options": {
+                            "ranker": "default_2024_08_21",
+                            "score_threshold": 0.0
+                        }
+                    }
+                }
+            ]
+        }
+
         run_response = requests.post(
             f"https://api.openai.com/v1/threads/{thread_id}/runs",
             headers=HEADERS,
-            json={
-                "assistant_id": "asst_uFDXSPAmDTPShC92EDlwCtBz",
-                "tools": [
-                    {
-                        "type": "file_search",
-                        "file_search": {
-                            "vector_store_id": "vs_R5HLAebBXbIv8MX7bsE9Gjzk",
-                            "ranking_options": {
-                                "ranker": "default_2024_08_21",
-                                "score_threshold": 0.0
-                            }
-                        }
-                    }
-                ]
-            }
+            json=run_payload
         )
-        run_response.raise_for_status()
-        run_id = run_response.json()["id"]
+        if run_response.status_code != 200:
+            # Log the response for debugging
+            print("Run Response:", run_response.json())
+            return jsonify({"error": f"Failed to create run: {run_response.json()}"}), 500
+
 
         # Step 4: Poll for the run results
         poll_interval = 2
