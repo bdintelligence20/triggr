@@ -29,7 +29,7 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
 
         <div className="p-6">
           <p className="text-gray-600">
-            Are you sure you want to delete "{item.name}"? This action cannot be undone.
+            Are you sure you want to delete {item.name}? This action cannot be undone.
           </p>
 
           <div className="flex justify-end gap-4 mt-6">
