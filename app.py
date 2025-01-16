@@ -99,7 +99,7 @@ def whatsapp_webhook():
         thread_response = requests.post(
             "https://api.openai.com/v1/threads",
             headers=HEADERS,
-            json={}  # No assistant ID here as it is linked in the assistant setup
+            json={}
         )
 
         if thread_response.status_code != 200:
@@ -143,24 +143,55 @@ def whatsapp_webhook():
         if run_response.status_code != 200:
             return jsonify({"error": f"Failed to create run: {run_response.json()}"}), 500
 
-        # Step 4: Poll for run completion and retrieve response
-        run_data = run_response.json()
-        if "results" not in run_data:
-            return jsonify({"error": "'results' key missing in run response", "response": run_data}), 500
-
-        assistant_response = run_data["results"][0]["content"][0]["text"]["value"]
-
-        # Step 5: Send the assistant's response back to WhatsApp
-        twilio_client.messages.create(
-            to=from_number,
-            from_=os.getenv("TWILIO_WHATSAPP_NUMBER"),
-            body=assistant_response
-        )
-
-        return "OK", 200
+        run_id = run_response.json()["id"]
+        
+        # Step 4: Poll for completion
+        import time
+        max_attempts = 60  # Maximum number of polling attempts
+        attempt = 0
+        while attempt < max_attempts:
+            run_status_response = requests.get(
+                f"https://api.openai.com/v1/threads/{thread_id}/runs/{run_id}",
+                headers=HEADERS
+            )
+            
+            if run_status_response.status_code != 200:
+                return jsonify({"error": f"Failed to get run status: {run_status_response.json()}"}), 500
+                
+            run_status = run_status_response.json()["status"]
+            
+            if run_status == "completed":
+                # Get messages after completion
+                messages_response = requests.get(
+                    f"https://api.openai.com/v1/threads/{thread_id}/messages",
+                    headers=HEADERS
+                )
+                
+                if messages_response.status_code != 200:
+                    return jsonify({"error": f"Failed to get messages: {messages_response.json()}"}), 500
+                    
+                # Get the latest assistant message
+                for message in messages_response.json()["data"]:
+                    if message["role"] == "assistant":
+                        assistant_response = message["content"][0]["text"]["value"]
+                        # Send the response via WhatsApp
+                        twilio_client.messages.create(
+                            to=from_number,
+                            from_=os.getenv("TWILIO_WHATSAPP_NUMBER"),
+                            body=assistant_response
+                        )
+                        return "OK", 200
+                        
+            elif run_status in ["failed", "cancelled", "expired"]:
+                return jsonify({"error": f"Run {run_status}"}), 500
+                
+            attempt += 1
+            time.sleep(1)  # Wait for 1 second before polling again
+            
+        return jsonify({"error": "Run timed out"}), 500
+        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
