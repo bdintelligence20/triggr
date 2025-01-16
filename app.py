@@ -99,7 +99,7 @@ def whatsapp_webhook():
         thread_response = requests.post(
             "https://api.openai.com/v1/threads",
             headers=HEADERS,
-            json={"title": "WhatsApp Interaction"}
+            json={}  # Create thread without unnecessary parameters
         )
 
         if thread_response.status_code != 200:
