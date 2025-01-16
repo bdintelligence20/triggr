@@ -55,13 +55,12 @@ def upload_files():
 
         file_ids = []
         for file in files:
-            # Upload each file using the updated OpenAI API
-            with file.stream as f:
-                response = openai.upload_file(
-                    file=f,
-                    purpose="search"  # Or "search" depending on the purpose
-                )
-                file_ids.append(response["id"])
+            # Upload each file using OpenAI's file API
+            response = openai.File.create(
+                file=file,
+                purpose="search"  # Set the purpose (e.g., "search" or "fine-tune")
+            )
+            file_ids.append(response["id"])
 
         # Attach files to the vector store
         for file_id in file_ids:
