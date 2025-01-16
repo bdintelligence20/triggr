@@ -95,86 +95,72 @@ def whatsapp_webhook():
         from_number = request.form.get("From")
         body = request.form.get("Body")
 
-        # Step 1: Create a new thread
+        # Step 1: Create a thread
         thread_response = requests.post(
             "https://api.openai.com/v1/threads",
             headers=HEADERS,
-            json={}
+            json={}  # No assistant ID here as it is linked in the assistant setup
         )
-        thread_response.raise_for_status()
+
+        if thread_response.status_code != 200:
+            return jsonify({"error": f"Failed to create thread: {thread_response.json()}"}), 500
+
         thread_id = thread_response.json()["id"]
 
-        # Step 2: Send user's message to the thread
+        # Step 2: Add the user's message to the thread
         message_response = requests.post(
             f"https://api.openai.com/v1/threads/{thread_id}/messages",
             headers=HEADERS,
-            json={"role": "user", "content": body}
+            json={
+                "role": "user",
+                "content": body
+            }
         )
-        message_response.raise_for_status()
+
+        if message_response.status_code != 200:
+            return jsonify({"error": f"Failed to add user message: {message_response.json()}"}), 500
 
         # Step 3: Run the assistant
-        run_payload = {
-            "assistant_id": "asst_uFDXSPAmDTPShC92EDlwCtBz",
-            "tools": [
-                {
-                    "type": "file_search",
-                    "file_search": {
-                        "vector_store_id": "vs_R5HLAebBXbIv8MX7bsE9Gjzk",
-                        "ranking_options": {
-                            "ranker": "default_2024_08_21",
-                            "score_threshold": 0.0
-                        }
-                    }
-                }
-            ]
-        }
-
         run_response = requests.post(
             f"https://api.openai.com/v1/threads/{thread_id}/runs",
             headers=HEADERS,
-            json=run_payload
+            json={
+                "assistant_id": "asst_uFDXSPAmDTPShC92EDlwCtBz",
+                "tools": [
+                    {
+                        "type": "file_search",
+                        "file_search": {
+                            "ranking_options": {
+                                "ranker": "default_2024_08_21",
+                                "score_threshold": 0.0
+                            }
+                        }
+                    }
+                ]
+            }
         )
+
         if run_response.status_code != 200:
-            # Log the response for debugging
-            print("Run Response:", run_response.json())
             return jsonify({"error": f"Failed to create run: {run_response.json()}"}), 500
 
+        # Step 4: Poll for run completion and retrieve response
+        run_data = run_response.json()
+        if "results" not in run_data:
+            return jsonify({"error": "'results' key missing in run response", "response": run_data}), 500
 
-        # Step 4: Poll for the run results
-        poll_interval = 2
-        max_attempts = 10
-        attempts = 0
-        while attempts < max_attempts:
-            time.sleep(poll_interval)
-            run_status_response = requests.get(
-                f"https://api.openai.com/v1/threads/{thread_id}/runs/{run_id}",
-                headers=HEADERS
-            )
-            run_status_response.raise_for_status()
-            run_status = run_status_response.json()["status"]
+        assistant_response = run_data["results"][0]["content"][0]["text"]["value"]
 
-            if run_status == "completed":
-                break
-            elif run_status == "failed":
-                return jsonify({"error": "Assistant run failed"}), 500
-
-            attempts += 1
-
-        if run_status != "completed":
-            return jsonify({"error": "Assistant run timed out"}), 500
-
-        assistant_response_content = run_status_response.json()["results"]["messages"][-1]["content"]
-
-        # Step 5: Send the assistant's response back via WhatsApp
+        # Step 5: Send the assistant's response back to WhatsApp
         twilio_client.messages.create(
             to=from_number,
             from_=os.getenv("TWILIO_WHATSAPP_NUMBER"),
-            body=assistant_response_content
+            body=assistant_response
         )
 
         return "OK", 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
