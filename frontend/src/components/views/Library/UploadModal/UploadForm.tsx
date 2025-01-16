@@ -2,7 +2,7 @@ import React, { useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import DropZone from './DropZone';
 import FilePreview from './FilePreview';
-import { LibraryItem, useFileStore } from '../store/useFileStore';
+import { useFileStore, LibraryItem } from '../store/useFileStore';
 
 interface UploadFormProps {
   onClose: () => void;
@@ -42,17 +42,19 @@ const UploadForm = ({ onClose }: UploadFormProps) => {
 
       const result = await response.json();
       
-      // Convert uploaded files to LibraryItem format
-      const newLibraryItems = files.map(file => ({
+      // Store metadata with OpenAI file IDs
+      const newLibraryItems: LibraryItem[] = files.map((file, index) => ({
         id: Math.random().toString(36).substr(2, 9),
         name: file.name,
-        type: 'file' as const,
+        type: 'file',
         size: `${(file.size / 1024 / 1024).toFixed(2)} MB`,
         owner: 'You',
         lastModified: new Date().toISOString(),
+        vectorStoreId: 'vs_R5HLAebBXbIv8MX7bsE9Gjzk',
+        openAIFileId: result.file_ids?.[index] // Assuming the API returns file_ids
       }));
 
-      // Add the new files to the store
+      // Add the new files metadata to the store
       addFiles(newLibraryItems);
       
       console.log('Files uploaded successfully:', result);
