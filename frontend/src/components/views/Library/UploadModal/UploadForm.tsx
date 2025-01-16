@@ -2,7 +2,7 @@ import React, { useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import DropZone from './DropZone';
 import FilePreview from './FilePreview';
-import { useFileStore } from '../store/useFileStore';
+import { LibraryItem, useFileStore } from '../store/useFileStore';
 
 interface UploadFormProps {
   onClose: () => void;

@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { File, Folder, Download } from 'lucide-react';
-import { LibraryItem } from '../store/useFileStore';
-import { useFileStore } from '../store/useFileStore';
+import { LibraryItem, useFileStore } from './store/useFileStore';
 import FileActionsMenu from './FileActions/FileActionsMenu';
 import DeleteConfirmationDialog from './FileActions/DeleteConfirmationDialog';
 import RenameDialog from './FileActions/RenameDialog';
