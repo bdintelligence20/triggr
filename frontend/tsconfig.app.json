@@ -17,6 +17,7 @@
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true,
     "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": false,
     "noUncheckedSideEffectImports": false
   },
   "include": ["src"]
