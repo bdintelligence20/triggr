@@ -95,7 +95,7 @@ def whatsapp_webhook():
         from_number = request.form.get("From")
         body = request.form.get("Body")
 
-        # Create a thread if necessary
+        # Create a thread
         thread_response = requests.post(
             "https://api.openai.com/v1/threads",
             headers=HEADERS,
@@ -103,7 +103,8 @@ def whatsapp_webhook():
         )
 
         if thread_response.status_code != 200:
-            return jsonify({"error": "Failed to create thread"}), 500
+            error_message = thread_response.json().get("error", "Unknown error during thread creation")
+            return jsonify({"error": f"Failed to create thread: {error_message}"}), 500
 
         thread_id = thread_response.json()["id"]
 
@@ -115,7 +116,8 @@ def whatsapp_webhook():
         )
 
         if message_response.status_code != 200:
-            return jsonify({"error": "Failed to send message to assistant"}), 500
+            error_message = message_response.json().get("error", "Unknown error during message creation")
+            return jsonify({"error": f"Failed to send message to assistant: {error_message}"}), 500
 
         assistant_response_content = message_response.json()["content"][0]["text"]["value"]
 
@@ -129,6 +131,7 @@ def whatsapp_webhook():
         return "OK", 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
