@@ -1,43 +1,71 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
 
 export interface LibraryItem {
-  id: string;          // OpenAI's file ID
-  name: string;        // Original filename
+  id: string;
+  name: string;
   type: 'file' | 'folder';
-  size?: string;       // Display size
+  size?: string;
   owner: string;
   lastModified: string;
-  items?: number;
-  vectorStoreId?: string;  // OpenAI vector store ID
-  openAIFileId?: string;   // OpenAI file ID
+  vectorStoreId?: string;
+  openAIFileId?: string;
 }
 
 interface FileState {
   files: LibraryItem[];
-  addFiles: (newFiles: LibraryItem[]) => void;
-  removeFile: (id: string) => void;
-  renameFile: (id: string, newName: string) => void;
+  fetchFiles: () => Promise<void>;
+  addFiles: (newFiles: LibraryItem[]) => Promise<void>;
+  removeFile: (id: string) => Promise<void>;
 }
 
-export const useFileStore = create<FileState>()(
-  persist(
-    (set) => ({
-      files: [],
-      addFiles: (newFiles) => set((state) => ({ 
-        files: [...state.files, ...newFiles] 
-      })),
-      removeFile: (id) => set((state) => ({ 
-        files: state.files.filter(file => file.id !== id) 
-      })),
-      renameFile: (id, newName) => set((state) => ({
-        files: state.files.map(file => 
-          file.id === id ? { ...file, name: newName } : file
-        )
-      }))
-    }),
-    {
-      name: 'file-metadata-storage',
+export const useFileStore = create<FileState>((set) => ({
+  files: [],
+  
+  fetchFiles: async () => {
+    try {
+      const response = await fetch('https://triggr.onrender.com/files');
+      if (!response.ok) throw new Error('Failed to fetch files');
+      const files = await response.json();
+      set({ files });
+    } catch (error) {
+      console.error('Error fetching files:', error);
     }
-  )
-);
+  },
+
+  addFiles: async (newFiles) => {
+    try {
+      // Save each file metadata to backend
+      await Promise.all(newFiles.map(file =>
+        fetch('https://triggr.onrender.com/files', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(file)
+        })
+      ));
+
+      // Refresh file list
+      const response = await fetch('https://triggr.onrender.com/files');
+      if (!response.ok) throw new Error('Failed to fetch files');
+      const files = await response.json();
+      set({ files });
+    } catch (error) {
+      console.error('Error adding files:', error);
+    }
+  },
+
+  removeFile: async (id) => {
+    try {
+      await fetch(`https://triggr.onrender.com/files/${id}`, {
+        method: 'DELETE'
+      });
+      
+      // Refresh file list
+      const response = await fetch('https://triggr.onrender.com/files');
+      if (!response.ok) throw new Error('Failed to fetch files');
+      const files = await response.json();
+      set({ files });
+    } catch (error) {
+      console.error('Error removing file:', error);
+    }
+  },
+}));

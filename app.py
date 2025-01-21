@@ -1,5 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime
 import os
 import requests
 from dotenv import load_dotenv
@@ -10,6 +12,8 @@ load_dotenv()
 
 # Initialize Flask app
 app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///files.db'  # or your preferred database
+db = SQLAlchemy(app)
 CORS(app)  # Enable CORS for all routes
 
 # Initialize Twilio client
@@ -17,6 +21,69 @@ twilio_client = Client(
     os.getenv("TWILIO_ACCOUNT_SID"),
     os.getenv("TWILIO_AUTH_TOKEN")
 )
+
+# File metadata model
+class FileMetadata(db.Model):
+    id = db.Column(db.String, primary_key=True)
+    name = db.Column(db.String, nullable=False)
+    type = db.Column(db.String, nullable=False)
+    size = db.Column(db.String)
+    owner = db.Column(db.String)
+    last_modified = db.Column(db.DateTime, default=datetime.utcnow)
+    vector_store_id = db.Column(db.String)
+    openai_file_id = db.Column(db.String)
+
+# Create tables
+with app.app_context():
+    db.create_all()
+
+@app.route("/files", methods=["GET"])
+def get_files():
+    try:
+        files = FileMetadata.query.all()
+        return jsonify([{
+            'id': file.id,
+            'name': file.name,
+            'type': file.type,
+            'size': file.size,
+            'owner': file.owner,
+            'lastModified': file.last_modified.isoformat(),
+            'vectorStoreId': file.vector_store_id,
+            'openAIFileId': file.openai_file_id
+        } for file in files])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/files", methods=["POST"])
+def save_file_metadata():
+    try:
+        data = request.json
+        new_file = FileMetadata(
+            id=data['id'],
+            name=data['name'],
+            type=data['type'],
+            size=data['size'],
+            owner=data['owner'],
+            vector_store_id=data.get('vectorStoreId'),
+            openai_file_id=data.get('openAIFileId')
+        )
+        db.session.add(new_file)
+        db.session.commit()
+        return jsonify({"message": "File metadata saved successfully"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/files/<file_id>", methods=["DELETE"])
+def delete_file(file_id):
+    try:
+        file = FileMetadata.query.get(file_id)
+        if file:
+            db.session.delete(file)
+            db.session.commit()
+            return jsonify({"message": "File deleted successfully"})
+        return jsonify({"error": "File not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "./uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -120,25 +187,25 @@ def whatsapp_webhook():
         if message_response.status_code != 200:
             return jsonify({"error": f"Failed to add user message: {message_response.json()}"}), 500
 
-       # Step 3: Run the assistant
-run_response = requests.post(
-    f"https://api.openai.com/v1/threads/{thread_id}/runs",
-    headers=HEADERS,
-    json={
-        "assistant_id": "asst_uFDXSPAmDTPShC92EDlwCtBz",
-        "tools": [
-            {
-                "type": "file_search",
-                "file_search": {
-                    "ranking_options": {
-                        "ranker": "default_2024_08_21",
-                        "score_threshold": 0.0
+        # Step 3: Run the assistant
+        run_response = requests.post(
+            f"https://api.openai.com/v1/threads/{thread_id}/runs",
+            headers=HEADERS,
+            json={
+                "assistant_id": "asst_uFDXSPAmDTPShC92EDlwCtBz",
+                "tools": [
+                    {
+                        "type": "file_search",
+                        "file_search": {
+                            "ranking_options": {
+                                "ranker": "default_2024_08_21",
+                                "score_threshold": 0.0
+                            }
+                        }
                     }
-                }
+                ]
             }
-        ]
-    }
-)
+        )
 
         if run_response.status_code != 200:
             return jsonify({"error": f"Failed to create run: {run_response.json()}"}), 500

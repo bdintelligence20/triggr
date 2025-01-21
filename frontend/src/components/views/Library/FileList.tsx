@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { File, Folder, Download } from 'lucide-react';
 import { LibraryItem, useFileStore } from './store/useFileStore';
 import FileActionsMenu from './FileActions/FileActionsMenu';
@@ -7,11 +7,27 @@ import RenameDialog from './FileActions/RenameDialog';
 
 const FileList = () => {
   const files = useFileStore(state => state.files);
+  const fetchFiles = useFileStore(state => state.fetchFiles);
   const removeFile = useFileStore(state => state.removeFile);
   const renameFile = useFileStore(state => state.renameFile);
   
   const [itemToDelete, setItemToDelete] = useState<LibraryItem | null>(null);
   const [itemToRename, setItemToRename] = useState<LibraryItem | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const loadFiles = async () => {
+      try {
+        await fetchFiles();
+      } catch (error) {
+        console.error('Error fetching files:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadFiles();
+  }, [fetchFiles]);
 
   const handleDelete = (item: LibraryItem) => {
     setItemToDelete(item);
@@ -21,17 +37,43 @@ const FileList = () => {
     setItemToRename(item);
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (!itemToDelete) return;
-    removeFile(itemToDelete.id);
-    setItemToDelete(null);
+    try {
+      await removeFile(itemToDelete.id);
+      setItemToDelete(null);
+    } catch (error) {
+      console.error('Error deleting file:', error);
+      // You might want to show an error notification here
+    }
   };
 
-  const confirmRename = (newName: string) => {
+  const confirmRename = async (newName: string) => {
     if (!itemToRename) return;
-    renameFile(itemToRename.id, newName);
-    setItemToRename(null);
+    try {
+      await renameFile(itemToRename.id, newName);
+      setItemToRename(null);
+    } catch (error) {
+      console.error('Error renaming file:', error);
+      // You might want to show an error notification here
+    }
   };
+
+  if (isLoading) {
+    return (
+      <div className="bg-white rounded-lg shadow p-8 text-center">
+        <p className="text-gray-500">Loading files...</p>
+      </div>
+    );
+  }
+
+  if (files.length === 0) {
+    return (
+      <div className="bg-white rounded-lg shadow p-8 text-center">
+        <p className="text-gray-500">No files uploaded yet</p>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-white rounded-lg shadow">
