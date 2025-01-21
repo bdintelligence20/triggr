@@ -120,26 +120,23 @@ def whatsapp_webhook():
         if message_response.status_code != 200:
             return jsonify({"error": f"Failed to add user message: {message_response.json()}"}), 500
 
-        run_response = requests.post(
+       # Step 3: Run the assistant
+run_response = requests.post(
     f"https://api.openai.com/v1/threads/{thread_id}/runs",
     headers=HEADERS,
     json={
         "assistant_id": "asst_uFDXSPAmDTPShC92EDlwCtBz",
-        "model": "gpt-4o",  # Explicitly set model
         "tools": [
             {
                 "type": "file_search",
                 "file_search": {
                     "ranking_options": {
                         "ranker": "default_2024_08_21",
-                        "score_threshold": 0.7,          # Increase relevance threshold
-                        "top_k": 5                       # Limit number of chunks retrieved
+                        "score_threshold": 0.0
                     }
                 }
             }
-        ],
-        "additional_instructions": "Focus on the most relevant information. If multiple pieces of information are found, prioritize the most recent and most directly relevant to the query.",
-        "max_tokens": 4096  # Limit response length
+        ]
     }
 )
 
