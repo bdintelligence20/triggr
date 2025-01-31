@@ -5,3 +5,9 @@ twilio
 flask-cors
 SQLAlchemy
 Flask-SQLAlchemy
+requests
+python-magic
+tiktoken
+langchain-openai
+langchain
+pinecone-client
