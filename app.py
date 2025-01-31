@@ -12,7 +12,7 @@ import json
 
 # Updated Langchain imports
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_pinecone import Pinecone as LangchainPinecone
+from langchain_community.vectorstores import Pinecone as LangchainPinecone
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.chains import ConversationalRetrievalChain
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
