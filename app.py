@@ -1,187 +1,174 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime
+from sqlalchemy import create_engine
+from sqlalchemy.pool import QueuePool
 import os
-import requests
 from dotenv import load_dotenv
 from twilio.rest import Client
-from pinecone import Pinecone
+from datetime import datetime
 import hashlib
 import json
 
-# Updated Langchain imports
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_community.vectorstores import Pinecone as LangchainPinecone
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.chains import ConversationalRetrievalChain
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langchain_core.prompts import PromptTemplate
-from langchain.memory import ConversationBufferMemory
+# R2R imports
+from r2r import (
+    Document,
+    Collection,
+    QueryEngine,
+    LLMConfig,
+    VectorDBConfig,
+    ProcessorConfig,
+    ChunkingConfig,
+    RetrievalConfig
+)
+from r2r.document import DocumentProcessor
+from r2r.vectordb import PineconeVectorDB
+from r2r.chunking import SemanticChunker
+from r2r.llm import OpenAILLM
+from r2r.processor import (
+    PDFProcessor,
+    DocxProcessor,
+    TextProcessor,
+    CSVProcessor
+)
+from r2r.retrieval import (
+    HybridRetriever,
+    ReRanker,
+    QueryExpander
+)
 
 # Load environment variables
 load_dotenv()
 
-# Initialize Flask app
+# Initialize Flask app with Supabase connection
+DATABASE_URL = f"postgresql://{os.getenv('SUPABASE_USER')}:{os.getenv('SUPABASE_PASSWORD')}@{os.getenv('SUPABASE_HOST')}:{os.getenv('SUPABASE_PORT')}/{os.getenv('SUPABASE_DATABASE')}"
+
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///files.db'
-db = SQLAlchemy(app)
+app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'poolclass': QueuePool,
+    'pool_size': 5,
+    'max_overflow': 10,
+    'pool_timeout': 30,
+    'pool_recycle': 1800,
+}
 CORS(app)
 
-# Initialize Langchain components
-embeddings = OpenAIEmbeddings(
-    openai_api_key=os.getenv("OPENAI_API_KEY")
-)
-
-llm = ChatOpenAI(
-    model_name="gpt-4-turbo-preview",
-    temperature=0.7,
-    openai_api_key=os.getenv("OPENAI_API_KEY")
-)
-
-# Initialize Pinecone
-pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-index_name = "triggrdocstore"
-
-# Initialize Pinecone index
-index = pc.Index(index_name)
-
-# Initialize vectorstore for Langchain
-vectorstore = LangchainPinecone(
-    index=index,
-    embedding=embeddings,
-    text_key="text"
-)
-
-# Initialize text splitter
-text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=1000,
-    chunk_overlap=200,
-    length_function=len,
-    separators=["\n\n", "\n", " ", ""]
-)
-
-# Initialize Twilio client
+# Initialize Twilio
 twilio_client = Client(
     os.getenv("TWILIO_ACCOUNT_SID"),
     os.getenv("TWILIO_AUTH_TOKEN")
 )
 
-# Define custom prompt template
-CONDENSE_QUESTION_PROMPT = PromptTemplate.from_template("""
-Given the following conversation and a follow up question, rephrase the follow up question to be a standalone question that captures all relevant context.
+# R2R Configuration
+llm_config = LLMConfig(
+    provider="openai",
+    model="gpt-4-turbo-preview",
+    api_key=os.getenv("OPENAI_API_KEY"),
+    temperature=0.7
+)
 
-Chat History:
-{chat_history}
+vector_config = VectorDBConfig(
+    provider="pinecone",
+    api_key=os.getenv("PINECONE_API_KEY"),
+    index_name="triggrdocstore",
+    environment="us-east-1"
+)
 
-Follow Up Input: {question}
+processor_config = ProcessorConfig(
+    pdf=PDFProcessor(),
+    docx=DocxProcessor(),
+    txt=TextProcessor(),
+    csv=CSVProcessor()
+)
 
-Standalone question:""")
+chunking_config = ChunkingConfig(
+    chunker=SemanticChunker(
+        chunk_size=500,
+        chunk_overlap=50,
+        semantics_model="all-MiniLM-L6-v2"
+    )
+)
 
-QA_PROMPT = PromptTemplate.from_template("""
-You are a helpful AI assistant. Use the following context to answer the user's question. 
-If you don't know the answer, just say you don't know. Don't mention that you're using any context.
+retrieval_config = RetrievalConfig(
+    retriever=HybridRetriever(
+        vector_weight=0.7,
+        keyword_weight=0.3
+    ),
+    reranker=ReRanker(
+        model="cross-encoder/ms-marco-MiniLM-L-6-v2",
+        top_k=5
+    ),
+    query_expander=QueryExpander(
+        expansion_model="all-MiniLM-L6-v2",
+        num_expansions=3
+    )
+)
 
-Context: {context}
+# Initialize R2R components
+collection = Collection(
+    vector_db=PineconeVectorDB(vector_config),
+    processor_config=processor_config,
+    chunking_config=chunking_config
+)
 
-Question: {question}
-
-Helpful answer:""")
+query_engine = QueryEngine(
+    collection=collection,
+    llm=OpenAILLM(llm_config),
+    retrieval_config=retrieval_config
+)
 
 # Create upload folder
 UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "./uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Models
-class FileMetadata(db.Model):
-    id = db.Column(db.String, primary_key=True)
-    name = db.Column(db.String, nullable=False)
-    type = db.Column(db.String, nullable=False)
-    size = db.Column(db.String)
-    owner = db.Column(db.String)
-    last_modified = db.Column(db.DateTime, default=datetime.utcnow)
-    chunk_ids = db.Column(db.String)  # Store chunk IDs as JSON string
+# Database models (using SQLAlchemy)
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import Column, String, DateTime, ForeignKey
+from sqlalchemy.orm import relationship
 
-class ChatThread(db.Model):
-    id = db.Column(db.String, primary_key=True)
-    user_id = db.Column(db.String, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    last_active = db.Column(db.DateTime, default=datetime.utcnow)
+Base = declarative_base()
 
-class Message(db.Model):
-    id = db.Column(db.String, primary_key=True)
-    thread_id = db.Column(db.String, db.ForeignKey('chat_thread.id'), nullable=False)
-    role = db.Column(db.String, nullable=False)
-    content = db.Column(db.Text, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+class FileMetadata(Base):
+    __tablename__ = 'file_metadata'
+    
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False)
+    type = Column(String, nullable=False)
+    size = Column(String)
+    owner = Column(String)
+    last_modified = Column(DateTime, default=datetime.utcnow)
+    doc_id = Column(String)  # R2R document ID
+    metadata = Column(String)  # JSON string for additional metadata
 
-# Create tables
-with app.app_context():
-    db.create_all()
+class ChatThread(Base):
+    __tablename__ = 'chat_thread'
+    
+    id = Column(String, primary_key=True)
+    user_id = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_active = Column(DateTime, default=datetime.utcnow)
+    messages = relationship("Message", back_populates="thread")
 
-def process_file_content(content, file_id):
-    """Process file content into chunks and store in vector database"""
-    # Split text into chunks
-    chunks = text_splitter.split_text(content)
+class Message(Base):
+    __tablename__ = 'message'
     
-    # Generate IDs for chunks
-    chunk_ids = [hashlib.md5(chunk.encode()).hexdigest() for chunk in chunks]
-    
-    # Prepare documents for vectorstore
-    texts = [{"id": id, "text": text, "metadata": {"file_id": file_id}} 
-            for id, text in zip(chunk_ids, chunks)]
-    
-    # Add to vectorstore
-    vectorstore.add_texts(
-        texts=[doc["text"] for doc in texts],
-        ids=[doc["id"] for doc in texts],
-        metadatas=[doc["metadata"] for doc in texts]
-    )
-    
-    return chunk_ids
+    id = Column(String, primary_key=True)
+    thread_id = Column(String, ForeignKey('chat_thread.id'), nullable=False)
+    role = Column(String, nullable=False)
+    content = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    thread = relationship("ChatThread", back_populates="messages")
 
-def get_chat_history(thread_id, limit=10):
-    """Get chat history in Langchain format"""
-    messages = Message.query.filter_by(thread_id=thread_id)\
-        .order_by(Message.created_at.desc())\
-        .limit(limit)\
-        .all()
-    
-    history = []
-    for i in range(0, len(messages)-1, 2):
-        if i+1 < len(messages):
-            history.append((messages[i].content, messages[i+1].content))
-    
-    return history
+# Create database tables
+engine = create_engine(DATABASE_URL)
+Base.metadata.create_all(engine)
 
 def allowed_file(filename):
     """Check if file type is allowed"""
     ALLOWED_EXTENSIONS = {'txt', 'pdf', 'doc', 'docx', 'csv'}
-    return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# Routes
-@app.route("/", methods=["GET"])
-def home():
-    return "Backend is running!"
-
-@app.route("/files", methods=["GET"])
-def get_files():
-    try:
-        files = FileMetadata.query.all()
-        return jsonify([{
-            'id': file.id,
-            'name': file.name,
-            'type': file.type,
-            'size': file.size,
-            'owner': file.owner,
-            'lastModified': file.last_modified.isoformat(),
-            'chunkIds': json.loads(file.chunk_ids) if file.chunk_ids else []
-        } for file in files])
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/upload-files", methods=["POST"])
+@app.route("/files", methods=["POST"])
 def upload_files():
     try:
         if 'files' not in request.files:
@@ -195,100 +182,104 @@ def upload_files():
                 try:
                     # Create a unique file ID
                     file_id = hashlib.md5(f"{file.filename}-{datetime.utcnow().isoformat()}".encode()).hexdigest()
-                    
-                    # Save file temporarily
                     temp_path = os.path.join(UPLOAD_FOLDER, file_id)
                     file.save(temp_path)
-                    
-                    # Read file content based on file type
-                    content = ""
-                    file_ext = file.filename.rsplit('.', 1)[1].lower()
-                    
-                    if file_ext == 'txt':
-                        # Try different encodings for text files
-                        encodings = ['utf-8', 'latin-1', 'cp1252']
-                        for encoding in encodings:
-                            try:
-                                with open(temp_path, 'r', encoding=encoding) as f:
-                                    content = f.read()
-                                break
-                            except UnicodeDecodeError:
-                                continue
-                    
-                    elif file_ext == 'pdf':
-                        import PyPDF2
-                        with open(temp_path, 'rb') as f:
-                            pdf_reader = PyPDF2.PdfReader(f)
-                            content = ""
-                            for page in pdf_reader.pages:
-                                content += page.extract_text() + "\n"
-                    
-                    elif file_ext in ['doc', 'docx']:
-                        import docx
-                        doc = docx.Document(temp_path)
-                        content = "\n".join([paragraph.text for paragraph in doc.paragraphs])
-                    
-                    elif file_ext == 'csv':
-                        import pandas as pd
-                        df = pd.read_csv(temp_path)
-                        content = df.to_string()
-                    
-                    if not content:
-                        raise ValueError(f"Could not extract content from file: {file.filename}")
-                    
-                    # Process content and store in vectorstore
-                    chunk_ids = process_file_content(content, file_id)
-                    
-                    # Save metadata
+
+                    # Process document with R2R
+                    doc = Document.from_file(
+                        file_path=temp_path,
+                        metadata={
+                            "filename": file.filename,
+                            "upload_date": datetime.utcnow().isoformat(),
+                            "owner": "user"  # Replace with actual user ID
+                        }
+                    )
+
+                    # Add document to collection
+                    doc_id = collection.add_document(doc)
+
+                    # Save metadata to database
                     new_file = FileMetadata(
                         id=file_id,
                         name=file.filename,
-                        type=file.content_type or f"text/{file_ext}",
+                        type=file.content_type or f"text/{file.filename.rsplit('.', 1)[1].lower()}",
                         size=str(os.path.getsize(temp_path)),
-                        owner="user",  # You might want to get this from auth
-                        chunk_ids=json.dumps(chunk_ids)
+                        owner="user",
+                        doc_id=doc_id,
+                        metadata=json.dumps(doc.metadata)
                     )
-                    db.session.add(new_file)
-                    
-                    # Clean up temporary file
+
+                    with engine.connect() as conn:
+                        conn.execute(
+                            FileMetadata.__table__.insert(),
+                            new_file.__dict__
+                        )
+                        conn.commit()
+
+                    # Clean up
                     os.remove(temp_path)
-                    
+
                     results.append({
                         "id": file_id,
                         "name": file.filename,
-                        "status": "success"
+                        "status": "success",
+                        "doc_id": doc_id
                     })
-                
+
                 except Exception as e:
                     results.append({
                         "name": file.filename,
                         "status": "error",
                         "error": str(e)
                     })
-                    # Clean up temporary file if it exists
                     if os.path.exists(temp_path):
                         os.remove(temp_path)
-        
-        db.session.commit()
+
         return jsonify({"message": "Files processed", "files": results})
-    
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/files", methods=["GET"])
+def get_files():
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(FileMetadata.__table__.select())
+            files = [{
+                'id': row.id,
+                'name': row.name,
+                'type': row.type,
+                'size': row.size,
+                'owner': row.owner,
+                'lastModified': row.last_modified.isoformat(),
+                'docId': row.doc_id,
+                'metadata': json.loads(row.metadata) if row.metadata else {}
+            } for row in result]
+        return jsonify(files)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/files/<file_id>", methods=["DELETE"])
 def delete_file(file_id):
     try:
-        file = FileMetadata.query.get(file_id)
-        if file:
-            # Delete chunks from vectorstore
-            chunk_ids = json.loads(file.chunk_ids) if file.chunk_ids else []
-            if chunk_ids:
-                vectorstore.delete(ids=chunk_ids)
+        with engine.connect() as conn:
+            # Get file metadata
+            result = conn.execute(
+                FileMetadata.__table__.select().where(FileMetadata.id == file_id)
+            ).first()
             
-            db.session.delete(file)
-            db.session.commit()
-            return jsonify({"message": "File deleted successfully"})
-        return jsonify({"error": "File not found"}), 404
+            if result:
+                # Delete from vector store
+                collection.delete_document(result.doc_id)
+                
+                # Delete from database
+                conn.execute(
+                    FileMetadata.__table__.delete().where(FileMetadata.id == file_id)
+                )
+                conn.commit()
+                
+                return jsonify({"message": "File deleted successfully"})
+            return jsonify({"error": "File not found"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -298,61 +289,84 @@ def whatsapp_webhook():
         from_number = request.form.get("From")
         body = request.form.get("Body")
 
-        # Get or create thread
-        thread = ChatThread.query.filter_by(user_id=from_number).first()
-        if not thread:
-            thread_id = hashlib.md5(from_number.encode()).hexdigest()
-            thread = ChatThread(id=thread_id, user_id=from_number)
-            db.session.add(thread)
-            db.session.commit()
+        # Get or create chat thread
+        with engine.connect() as conn:
+            thread = conn.execute(
+                ChatThread.__table__.select().where(ChatThread.user_id == from_number)
+            ).first()
 
-        # Get chat history
-        chat_history = get_chat_history(thread.id)
+            if not thread:
+                thread_id = hashlib.md5(from_number.encode()).hexdigest()
+                conn.execute(
+                    ChatThread.__table__.insert(),
+                    {
+                        "id": thread_id,
+                        "user_id": from_number,
+                        "created_at": datetime.utcnow(),
+                        "last_active": datetime.utcnow()
+                    }
+                )
+                conn.commit()
+            else:
+                thread_id = thread.id
 
-        # Initialize conversation chain
-        qa_chain = ConversationalRetrievalChain.from_llm(
-            llm=llm,
-            retriever=vectorstore.as_retriever(),
-            memory=ConversationBufferMemory(
-                memory_key="chat_history",
-                return_messages=True,
-                output_key="answer"
-            ),
-            condense_question_prompt=CONDENSE_QUESTION_PROMPT,
-            combine_docs_chain_kwargs={"prompt": QA_PROMPT},
-            return_source_documents=True,
-            verbose=True
+            # Get chat history
+            messages = conn.execute(
+                Message.__table__.select()
+                .where(Message.thread_id == thread_id)
+                .order_by(Message.created_at.desc())
+                .limit(10)
+            ).all()
+
+            chat_history = [
+                {"role": msg.role, "content": msg.content}
+                for msg in reversed(messages)
+            ]
+
+        # Query using R2R
+        response = query_engine.query(
+            query=body,
+            chat_history=chat_history
         )
 
-        # Get response
-        response = qa_chain.invoke({
-            "question": body,
-            "chat_history": chat_history
-        })
+        assistant_response = response.answer
 
-        assistant_response = response["answer"]
+        # Save messages
+        with engine.connect() as conn:
+            # Save user message
+            conn.execute(
+                Message.__table__.insert(),
+                {
+                    "id": hashlib.md5(f"{thread_id}-{datetime.utcnow().isoformat()}".encode()).hexdigest(),
+                    "thread_id": thread_id,
+                    "role": "user",
+                    "content": body,
+                    "created_at": datetime.utcnow()
+                }
+            )
 
-        # Save messages to database
-        new_user_message = Message(
-            id=hashlib.md5(f"{thread.id}-{datetime.utcnow().isoformat()}".encode()).hexdigest(),
-            thread_id=thread.id,
-            role="user",
-            content=body
-        )
-        new_assistant_message = Message(
-            id=hashlib.md5(f"{thread.id}-{datetime.utcnow().isoformat()}-assistant".encode()).hexdigest(),
-            thread_id=thread.id,
-            role="assistant",
-            content=assistant_response
-        )
-        db.session.add(new_user_message)
-        db.session.add(new_assistant_message)
-        
-        # Update thread last_active
-        thread.last_active = datetime.utcnow()
-        db.session.commit()
+            # Save assistant message
+            conn.execute(
+                Message.__table__.insert(),
+                {
+                    "id": hashlib.md5(f"{thread_id}-{datetime.utcnow().isoformat()}-assistant".encode()).hexdigest(),
+                    "thread_id": thread_id,
+                    "role": "assistant",
+                    "content": assistant_response,
+                    "created_at": datetime.utcnow()
+                }
+            )
 
-        # Send response via WhatsApp
+            # Update thread last_active
+            conn.execute(
+                ChatThread.__table__.update()
+                .where(ChatThread.id == thread_id)
+                .values(last_active=datetime.utcnow())
+            )
+            
+            conn.commit()
+
+        # Send WhatsApp response
         twilio_client.messages.create(
             to=from_number,
             from_=os.getenv("TWILIO_WHATSAPP_NUMBER"),
