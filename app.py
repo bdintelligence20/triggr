@@ -192,42 +192,85 @@ def upload_files():
 
         for file in files:
             if file and allowed_file(file.filename):
-                # Create a unique file ID
-                file_id = hashlib.md5(f"{file.filename}-{datetime.utcnow().isoformat()}".encode()).hexdigest()
+                try:
+                    # Create a unique file ID
+                    file_id = hashlib.md5(f"{file.filename}-{datetime.utcnow().isoformat()}".encode()).hexdigest()
+                    
+                    # Save file temporarily
+                    temp_path = os.path.join(UPLOAD_FOLDER, file_id)
+                    file.save(temp_path)
+                    
+                    # Read file content based on file type
+                    content = ""
+                    file_ext = file.filename.rsplit('.', 1)[1].lower()
+                    
+                    if file_ext == 'txt':
+                        # Try different encodings for text files
+                        encodings = ['utf-8', 'latin-1', 'cp1252']
+                        for encoding in encodings:
+                            try:
+                                with open(temp_path, 'r', encoding=encoding) as f:
+                                    content = f.read()
+                                break
+                            except UnicodeDecodeError:
+                                continue
+                    
+                    elif file_ext == 'pdf':
+                        import PyPDF2
+                        with open(temp_path, 'rb') as f:
+                            pdf_reader = PyPDF2.PdfReader(f)
+                            content = ""
+                            for page in pdf_reader.pages:
+                                content += page.extract_text() + "\n"
+                    
+                    elif file_ext in ['doc', 'docx']:
+                        import docx
+                        doc = docx.Document(temp_path)
+                        content = "\n".join([paragraph.text for paragraph in doc.paragraphs])
+                    
+                    elif file_ext == 'csv':
+                        import pandas as pd
+                        df = pd.read_csv(temp_path)
+                        content = df.to_string()
+                    
+                    if not content:
+                        raise ValueError(f"Could not extract content from file: {file.filename}")
+                    
+                    # Process content and store in vectorstore
+                    chunk_ids = process_file_content(content, file_id)
+                    
+                    # Save metadata
+                    new_file = FileMetadata(
+                        id=file_id,
+                        name=file.filename,
+                        type=file.content_type or f"text/{file_ext}",
+                        size=str(os.path.getsize(temp_path)),
+                        owner="user",  # You might want to get this from auth
+                        chunk_ids=json.dumps(chunk_ids)
+                    )
+                    db.session.add(new_file)
+                    
+                    # Clean up temporary file
+                    os.remove(temp_path)
+                    
+                    results.append({
+                        "id": file_id,
+                        "name": file.filename,
+                        "status": "success"
+                    })
                 
-                # Save file temporarily
-                temp_path = os.path.join(UPLOAD_FOLDER, file_id)
-                file.save(temp_path)
-                
-                # Read file content
-                with open(temp_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                
-                # Process content and store in vectorstore
-                chunk_ids = process_file_content(content, file_id)
-                
-                # Save metadata
-                new_file = FileMetadata(
-                    id=file_id,
-                    name=file.filename,
-                    type=file.content_type or "text/plain",
-                    size=str(os.path.getsize(temp_path)),
-                    owner="user",  # You might want to get this from auth
-                    chunk_ids=json.dumps(chunk_ids)
-                )
-                db.session.add(new_file)
-                
-                # Clean up temporary file
-                os.remove(temp_path)
-                
-                results.append({
-                    "id": file_id,
-                    "name": file.filename,
-                    "status": "success"
-                })
+                except Exception as e:
+                    results.append({
+                        "name": file.filename,
+                        "status": "error",
+                        "error": str(e)
+                    })
+                    # Clean up temporary file if it exists
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
         
         db.session.commit()
-        return jsonify({"message": "Files processed successfully", "files": results})
+        return jsonify({"message": "Files processed", "files": results})
     
     except Exception as e:
         return jsonify({"error": str(e)}), 500
