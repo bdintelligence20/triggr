@@ -10,10 +10,9 @@ from pinecone import Pinecone
 import hashlib
 import json
 
-# Langchain imports
-from langchain_community.embeddings import OpenAIEmbeddings
-from langchain_community.chat_models import ChatOpenAI
-from langchain_community.vectorstores import Pinecone as LangchainPinecone
+# Updated Langchain imports
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_pinecone import Pinecone as LangchainPinecone
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.chains import ConversationalRetrievalChain
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
@@ -44,20 +43,7 @@ llm = ChatOpenAI(
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 index_name = "triggrdocstore"
 
-if index_name not in pc.list_indexes().names():
-    pc.create_index(
-        name=index_name,
-        spec=pc.create_index_spec(
-            name=index_name,
-            dimension=1536,  # OpenAI embedding dimension
-            metric="cosine",
-            spec_type="serverless",
-            cloud="aws",
-            region="us-east-1"
-        )
-    )
-
-# Get Pinecone index
+# Initialize Pinecone index
 index = pc.Index(index_name)
 
 # Initialize vectorstore for Langchain
@@ -101,6 +87,10 @@ Context: {context}
 Question: {question}
 
 Helpful answer:""")
+
+# Create upload folder
+UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "./uploads")
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Models
 class FileMetadata(db.Model):
@@ -164,7 +154,17 @@ def get_chat_history(thread_id, limit=10):
     
     return history
 
+def allowed_file(filename):
+    """Check if file type is allowed"""
+    ALLOWED_EXTENSIONS = {'txt', 'pdf', 'doc', 'docx', 'csv'}
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
 # Routes
+@app.route("/", methods=["GET"])
+def home():
+    return "Backend is running!"
+
 @app.route("/files", methods=["GET"])
 def get_files():
     try:
@@ -181,24 +181,54 @@ def get_files():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route("/files", methods=["POST"])
-def save_file_metadata():
+@app.route("/upload-files", methods=["POST"])
+def upload_files():
     try:
-        data = request.json
-        file_content = data.get('content', '')
-        chunk_ids = process_file_content(file_content, data['id']) if file_content else []
+        if 'files' not in request.files:
+            return jsonify({"error": "No files provided"}), 400
+
+        files = request.files.getlist('files')
+        results = []
+
+        for file in files:
+            if file and allowed_file(file.filename):
+                # Create a unique file ID
+                file_id = hashlib.md5(f"{file.filename}-{datetime.utcnow().isoformat()}".encode()).hexdigest()
+                
+                # Save file temporarily
+                temp_path = os.path.join(UPLOAD_FOLDER, file_id)
+                file.save(temp_path)
+                
+                # Read file content
+                with open(temp_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                # Process content and store in vectorstore
+                chunk_ids = process_file_content(content, file_id)
+                
+                # Save metadata
+                new_file = FileMetadata(
+                    id=file_id,
+                    name=file.filename,
+                    type=file.content_type or "text/plain",
+                    size=str(os.path.getsize(temp_path)),
+                    owner="user",  # You might want to get this from auth
+                    chunk_ids=json.dumps(chunk_ids)
+                )
+                db.session.add(new_file)
+                
+                # Clean up temporary file
+                os.remove(temp_path)
+                
+                results.append({
+                    "id": file_id,
+                    "name": file.filename,
+                    "status": "success"
+                })
         
-        new_file = FileMetadata(
-            id=data['id'],
-            name=data['name'],
-            type=data['type'],
-            size=data['size'],
-            owner=data['owner'],
-            chunk_ids=json.dumps(chunk_ids)
-        )
-        db.session.add(new_file)
         db.session.commit()
-        return jsonify({"message": "File metadata saved successfully", "chunkIds": chunk_ids})
+        return jsonify({"message": "Files processed successfully", "files": results})
+    
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
