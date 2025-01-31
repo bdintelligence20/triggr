@@ -10,5 +10,6 @@ python-magic
 tiktoken
 langchain-openai
 langchain
+langchain-core
 pinecone-client
 langchain-community
