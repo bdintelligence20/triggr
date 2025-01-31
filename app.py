@@ -10,31 +10,15 @@ import hashlib
 import json
 
 # R2R imports
-from r2r import (
-    Document,
-    Collection,
-    QueryEngine,
-    LLMConfig,
-    VectorDBConfig,
-    ProcessorConfig,
-    ChunkingConfig,
-    RetrievalConfig
-)
-from r2r.document import DocumentProcessor
-from r2r.vectordb import PineconeVectorDB
-from r2r.chunking import SemanticChunker
-from r2r.llm import OpenAILLM
-from r2r.processor import (
-    PDFProcessor,
-    DocxProcessor,
-    TextProcessor,
-    CSVProcessor
-)
-from r2r.retrieval import (
-    HybridRetriever,
-    ReRanker,
-    QueryExpander
-)
+from r2r.embeddings import OpenAIEmbeddings
+from r2r.vector_store import Pinecone
+from r2r.schema import Document, Query, Context
+from r2r.chunker import TokenTextSplitter
+from r2r.retriever import VectorRetriever
+from r2r.llm import OpenAI
+from r2r.reranker import CohereReranker
+from r2r.pipeline import Pipeline
+from r2r.chat_history import ChatHistory
 
 # Load environment variables
 load_dotenv()
@@ -59,62 +43,119 @@ twilio_client = Client(
     os.getenv("TWILIO_AUTH_TOKEN")
 )
 
-# R2R Configuration
-llm_config = LLMConfig(
-    provider="openai",
-    model="gpt-4-turbo-preview",
+# R2R imports
+from r2r.embeddings import OpenAIEmbeddings
+from r2r.vector_store import Pinecone
+from r2r.schema import Document, Query, Context
+from r2r.chunker import TokenTextSplitter
+from r2r.retriever import VectorRetriever, HybridRetriever, CrossEncoderRetriever
+from r2r.llm import OpenAI
+from r2r.pipeline import Pipeline
+from r2r.chat_history import ChatHistory
+from r2r.prompts import Prompt
+
+# Custom ranking function
+def custom_rank_documents(docs, query, llm):
+    """
+    Custom ranking function that uses GPT-4 to score document relevance
+    """
+    ranking_prompt = Prompt("""
+    Rate how relevant the following document is to answering the query.
+    Score from 0-10 where 10 is perfectly relevant and 0 is completely irrelevant.
+    Only output the numerical score.
+    
+    Query: {query}
+    
+    Document: {document}
+    
+    Relevance Score (0-10): """)
+    
+    scored_docs = []
+    for doc in docs:
+        response = llm.complete(
+            ranking_prompt.format(
+                query=query,
+                document=doc.content
+            )
+        )
+        try:
+            score = float(response.strip())
+            scored_docs.append((doc, score))
+        except ValueError:
+            scored_docs.append((doc, 0))
+    
+    # Sort by score descending
+    return [doc for doc, score in sorted(scored_docs, key=lambda x: x[1], reverse=True)]
+
+# Initialize R2R components
+embeddings = OpenAIEmbeddings(
     api_key=os.getenv("OPENAI_API_KEY"),
+    model="text-embedding-3-large"  # Using the latest embedding model
+)
+
+vector_store = Pinecone(
+    api_key=os.getenv("PINECONE_API_KEY"),
+    environment="us-east-1",
+    index_name="triggrdocstore"
+)
+
+chunker = TokenTextSplitter(
+    chunk_size=500,
+    chunk_overlap=100,  # Increased overlap for better context
+    add_start_index=True
+)
+
+# Primary vector retriever
+vector_retriever = VectorRetriever(
+    vector_store=vector_store,
+    embeddings=embeddings,
+    top_k=10  # Retrieve more candidates for re-ranking
+)
+
+# Cross-encoder retriever for semantic similarity
+cross_encoder_retriever = CrossEncoderRetriever(
+    model_name="cross-encoder/ms-marco-MiniLM-L-12-v2",
+    top_k=5
+)
+
+# Hybrid retriever combining vector and keyword search
+hybrid_retriever = HybridRetriever(
+    retrievers=[vector_retriever, cross_encoder_retriever],
+    weights=[0.7, 0.3]
+)
+
+llm = OpenAI(
+    api_key=os.getenv("OPENAI_API_KEY"),
+    model="gpt-4-turbo-preview",
     temperature=0.7
 )
 
-vector_config = VectorDBConfig(
-    provider="pinecone",
-    api_key=os.getenv("PINECONE_API_KEY"),
-    index_name="triggrdocstore",
-    environment="us-east-1"
+# Custom pipeline that includes ranking
+class EnhancedPipeline(Pipeline):
+    def retrieve(self, query: Query, **kwargs) -> list[Document]:
+        # Get initial candidates from hybrid retriever
+        candidates = self.retriever.retrieve(query, **kwargs)
+        
+        # Apply cross-encoder ranking
+        if len(candidates) > 1:
+            candidates = cross_encoder_retriever.rerank(candidates, query)
+        
+        # Apply custom GPT-4 ranking for final ordering
+        ranked_docs = custom_rank_documents(candidates, query.text, self.llm)
+        
+        return ranked_docs[:5]  # Return top 5 after all ranking steps
+
+# Initialize enhanced pipeline
+pipeline = EnhancedPipeline(
+    retriever=hybrid_retriever,
+    llm=llm
 )
 
-processor_config = ProcessorConfig(
-    pdf=PDFProcessor(),
-    docx=DocxProcessor(),
-    txt=TextProcessor(),
-    csv=CSVProcessor()
-)
-
-chunking_config = ChunkingConfig(
-    chunker=SemanticChunker(
-        chunk_size=500,
-        chunk_overlap=50,
-        semantics_model="all-MiniLM-L6-v2"
-    )
-)
-
-retrieval_config = RetrievalConfig(
-    retriever=HybridRetriever(
-        vector_weight=0.7,
-        keyword_weight=0.3
-    ),
-    reranker=ReRanker(
-        model="cross-encoder/ms-marco-MiniLM-L-6-v2",
-        top_k=5
-    ),
-    query_expander=QueryExpander(
-        expansion_model="all-MiniLM-L6-v2",
-        num_expansions=3
-    )
-)
-
-# Initialize R2R components
-collection = Collection(
-    vector_db=PineconeVectorDB(vector_config),
-    processor_config=processor_config,
-    chunking_config=chunking_config
-)
-
-query_engine = QueryEngine(
-    collection=collection,
-    llm=OpenAILLM(llm_config),
-    retrieval_config=retrieval_config
+# Initialize chat history with metadata tracking
+chat_history = ChatHistory(
+    max_messages=10,
+    include_timestamps=True,
+    track_token_usage=True
 )
 
 # Create upload folder
