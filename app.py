@@ -42,11 +42,12 @@ class APIConfig:
     WA_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
     WA_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN")
     
-    # API Headers – adjust if your R2R API requires 'X-API-Key' instead of 'Authorization'
+    # API Headers
+    # Using X-API-Key instead of Authorization for the R2R API
     @classmethod
     def r2r_headers(cls):
         return {
-            "Authorization": f"Bearer {cls.R2R_API_KEY}",
+            "X-API-Key": cls.R2R_API_KEY,
             "Content-Type": "application/json"
         }
     
@@ -120,10 +121,10 @@ class MessageProcessor:
     async def get_embedding(text: str) -> list:
         """
         Get embedding for a text message.
-        (Note: This endpoint (/documents/embeddings) is not documented in your provided Documents API page.
-         If you have a separate embeddings service for chat messages, update this method accordingly.)
+        (Note: If you have a separate embeddings service for chat messages, update this method.)
         """
-        async with httpx.AsyncClient() as client:
+        # Disable SSL verification for this call (for testing only)
+        async with httpx.AsyncClient(verify=False) as client:
             response = await client.post(
                 f"{APIConfig.R2R_BASE_URL}/documents/embeddings",
                 headers=APIConfig.r2r_headers(),
@@ -168,7 +169,7 @@ class MessageProcessor:
             context = " ".join([match.metadata['text'] for match in search_results.matches])
 
             # Generate AI response using the chat completions endpoint
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=False) as client:
                 response = await client.post(
                     f"{APIConfig.R2R_BASE_URL}/chat/completions",
                     headers=APIConfig.r2r_headers(),
@@ -202,7 +203,7 @@ class MessageProcessor:
 def whatsapp_webhook():
     """Handle WhatsApp webhook events and process messages with RAG interface"""
     try:
-        # Handle webhook verification (GET request)
+        # Webhook verification (GET request)
         if request.method == "GET":
             mode = request.args.get("hub.mode")
             token = request.args.get("hub.verify_token")
@@ -247,7 +248,10 @@ def whatsapp_webhook():
                             WhatsAppAPI.send_message_sync(from_number, ai_response)
                         except Exception as e:
                             logger.error(f"Error processing message with RAG: {str(e)}")
-                            WhatsAppAPI.send_message_sync(from_number, "Sorry, an error occurred while processing your message.")
+                            try:
+                                WhatsAppAPI.send_message_sync(from_number, "Sorry, an error occurred while processing your message.")
+                            except Exception as inner_e:
+                                logger.error(f"Error sending error message: {str(inner_e)}")
         return jsonify({"status": "success"}), 200
 
     except Exception as e:
@@ -307,7 +311,7 @@ def upload_files():
                             content = f.read().decode('utf-8', errors='ignore')
                     logger.info(f"File content extracted, length: {len(content)}")
 
-                    # Ingest document via R2R Documents API
+                    # Ingest document via R2R Documents API (disable SSL verification)
                     with httpx.Client(verify=False) as client:
                         ingest_response = client.post(
                             f"{APIConfig.R2R_BASE_URL}/documents",
