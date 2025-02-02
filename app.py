@@ -9,6 +9,7 @@ import json
 import os
 from dotenv import load_dotenv
 import logging
+import asyncio
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -33,7 +34,7 @@ class APIConfig:
 
     # R2R (Documents API)
     R2R_API_KEY = os.getenv("R2R_API_KEY")
-    R2R_BASE_URL = "https://api.sciphi.ai/v3"  # Base URL remains as given
+    R2R_BASE_URL = "https://api.sciphi.ai/v3"  # Use the base URL provided by your service
     
     # WhatsApp
     WA_API_VERSION = "v17.0"
@@ -41,11 +42,9 @@ class APIConfig:
     WA_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
     WA_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN")
     
-    # API Headers
+    # API Headers – adjust if your R2R API requires 'X-API-Key' instead of 'Authorization'
     @classmethod
     def r2r_headers(cls):
-        # If your API expects the key in the X-API-Key header instead, change as follows:
-        # return {"X-API-Key": cls.R2R_API_KEY, "Content-Type": "application/json"}
         return {
             "Authorization": f"Bearer {cls.R2R_API_KEY}",
             "Content-Type": "application/json"
@@ -121,8 +120,8 @@ class MessageProcessor:
     async def get_embedding(text: str) -> list:
         """
         Get embedding for a text message.
-        (Note: The endpoint used here is not documented on the provided Documents API page.
-        You may need to update this method if a different service is used for chat embeddings.)
+        (Note: This endpoint (/documents/embeddings) is not documented in your provided Documents API page.
+         If you have a separate embeddings service for chat messages, update this method accordingly.)
         """
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -138,7 +137,7 @@ class MessageProcessor:
 
     @staticmethod
     async def process_message(from_number: str, message_text: str) -> str:
-        """Process incoming message and generate response"""
+        """Process an incoming message using RAG logic and generate a response"""
         try:
             # Store user message in Supabase
             message_id = hashlib.md5(f"{from_number}-{datetime.utcnow().isoformat()}".encode()).hexdigest()
@@ -159,19 +158,16 @@ class MessageProcessor:
                 .limit(10)\
                 .execute()
 
-            # Get embedding for the incoming message (for vector search)
+            # Get embedding for the incoming message (for context retrieval)
             embedding = await MessageProcessor.get_embedding(message_text)
             search_results = vector_index.query(
                 vector=embedding,
                 top_k=5,
                 include_metadata=True
             )
-            context = " ".join([
-                match.metadata['text'] 
-                for match in search_results.matches
-            ])
+            context = " ".join([match.metadata['text'] for match in search_results.matches])
 
-            # Generate response using R2R chat completions endpoint
+            # Generate AI response using the chat completions endpoint
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     f"{APIConfig.R2R_BASE_URL}/chat/completions",
@@ -204,9 +200,9 @@ class MessageProcessor:
 
 @app.route("/whatsapp", methods=["GET", "POST"])
 def whatsapp_webhook():
-    """Handle WhatsApp webhook events"""
+    """Handle WhatsApp webhook events and process messages with RAG interface"""
     try:
-        # Webhook verification (GET request)
+        # Handle webhook verification (GET request)
         if request.method == "GET":
             mode = request.args.get("hub.mode")
             token = request.args.get("hub.verify_token")
@@ -237,11 +233,21 @@ def whatsapp_webhook():
                         from_number = message["from"]
                         message_text = message["text"]["body"]
                         logger.info(f"Processing message from {from_number}: {message_text}")
-                        # Send immediate acknowledgment using the synchronous method
+
+                        # Send immediate acknowledgment
                         try:
                             WhatsAppAPI.send_message_sync(from_number, "Message received. Processing...")
                         except Exception as e:
                             logger.error(f"Error sending acknowledgment: {str(e)}")
+                        
+                        # Process the message using RAG logic
+                        try:
+                            ai_response = asyncio.run(MessageProcessor.process_message(from_number, message_text))
+                            # Send the generated AI response back to the user
+                            WhatsAppAPI.send_message_sync(from_number, ai_response)
+                        except Exception as e:
+                            logger.error(f"Error processing message with RAG: {str(e)}")
+                            WhatsAppAPI.send_message_sync(from_number, "Sorry, an error occurred while processing your message.")
         return jsonify({"status": "success"}), 200
 
     except Exception as e:
@@ -283,7 +289,7 @@ def upload_files():
                 temp_path = None
                 try:
                     logger.info(f"Processing file: {file.filename}")
-                    # Create a unique temporary file ID
+                    # Create a unique file ID
                     file_id = hashlib.md5(f"{file.filename}-{datetime.utcnow().isoformat()}".encode()).hexdigest()
                     temp_path = os.path.join(UPLOAD_FOLDER, file_id)
                     file.save(temp_path)
@@ -329,7 +335,7 @@ def upload_files():
                     vectors = []
                     for i, chunk in enumerate(chunks_data):
                         vector_id = f"{document_id}-chunk-{i}"
-                        # Assume each chunk has an "embedding" field and a "text" field.
+                        # Assume each chunk has an "embedding" and a "text" field
                         vectors.append({
                             'id': vector_id,
                             'values': chunk["embedding"],
