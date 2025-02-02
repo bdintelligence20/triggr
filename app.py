@@ -207,12 +207,13 @@ def whatsapp_webhook():
                 if mode == "subscribe" and token == APIConfig.WA_VERIFY_TOKEN:
                     if challenge:
                         logger.info(f"Webhook verified! Challenge: {challenge}")
-                        return str(challenge)  # Must return the challenge as a string
+                        return str(challenge)
                     return "No challenge found", 400
                 return "Invalid verification token", 403
             return "Invalid parameters", 400
 
         # Process incoming messages (POST request)
+        logger.info(f"Headers: {dict(request.headers)}")
         data = request.json
         logger.info(f"Received webhook data: {json.dumps(data)}")
         
@@ -220,23 +221,32 @@ def whatsapp_webhook():
             for entry in data.get("entry", []):
                 for change in entry.get("changes", []):
                     messages = change.get("value", {}).get("messages", [])
+                    logger.info(f"Processing messages: {messages}")
                     
                     for message in messages:
                         if message.get("type") != "text":
+                            logger.info(f"Skipping non-text message: {message.get('type')}")
                             continue
                             
                         from_number = message["from"]
                         message_text = message["text"]["body"]
                         
-                        # Start async processing in a background task
-                        # For now, we'll handle it synchronously
-                        # Process message and get response
-                        WhatsAppAPI.send_message_sync(from_number, "Thank you for your message. Processing...")
+                        logger.info(f"Processing message from {from_number}: {message_text}")
+                        
+                        # Send immediate acknowledgment
+                        try:
+                            WhatsAppAPI.send_message_sync(
+                                from_number, 
+                                "Message received. Processing..."
+                            )
+                        except Exception as e:
+                            logger.error(f"Error sending acknowledgment: {str(e)}")
 
         return jsonify({"status": "success"}), 200
 
     except Exception as e:
         logger.error(f"Webhook error: {str(e)}")
+        logger.exception("Full traceback:")
         return jsonify({"error": str(e)}), 500
 
 # Update WhatsAppAPI to include sync method
@@ -272,62 +282,79 @@ def upload_files():
         for file in files:
             if file and allowed_file(file.filename):
                 try:
+                    logger.info(f"Processing file: {file.filename}")
+                    
                     # Create unique file ID
                     file_id = hashlib.md5(f"{file.filename}-{datetime.utcnow().isoformat()}".encode()).hexdigest()
                     temp_path = os.path.join(UPLOAD_FOLDER, file_id)
                     file.save(temp_path)
 
-                    # Read file content
-                    with open(temp_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        content = f.read()
+                    # Read file content based on type
+                    if file.filename.endswith('.pdf'):
+                        import PyPDF2
+                        with open(temp_path, 'rb') as pdf_file:
+                            pdf_reader = PyPDF2.PdfReader(pdf_file)
+                            content = ""
+                            for page in pdf_reader.pages:
+                                content += page.extract_text() + "\n"
+                    else:
+                        with open(temp_path, 'rb') as f:
+                            content = f.read().decode('utf-8', errors='ignore')
 
-                    # Process with R2R
-                    r2r_response = httpx.post(
-                        f"{APIConfig.R2R_BASE_URL}/documents",
+                    logger.info(f"File content extracted, length: {len(content)}")
+
+                    # Process with R2R using verify=False for SSL
+                    client = httpx.Client(verify=False)
+                    r2r_response = client.post(
+                        f"{APIConfig.R2R_BASE_URL}/embeddings",
                         headers=APIConfig.r2r_headers(),
-                        json={
-                            "content": content,
-                            "metadata": {"filename": file.filename}
-                        }
+                        json={"input": content}
                     ).json()
 
-                    # Get embeddings from R2R
-                    embeddings_response = httpx.get(
-                        f"{APIConfig.R2R_BASE_URL}/documents/{r2r_response['id']}/embeddings",
-                        headers=APIConfig.r2r_headers()
-                    ).json()
+                    logger.info(f"R2R embeddings generated")
 
-                    # Store in Pinecone
+                    # Create vectors for Pinecone
                     vectors = []
-                    vector_ids = []
-                    for chunk in embeddings_response['chunks']:
-                        vector_id = hashlib.md5(chunk['text'].encode()).hexdigest()
+                    chunk_size = 1000  # Size of each text chunk
+                    chunks = [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
+                    
+                    for i, chunk in enumerate(chunks):
+                        vector_id = f"{file_id}-chunk-{i}"
                         vectors.append({
                             'id': vector_id,
-                            'values': chunk['embedding'],
+                            'values': r2r_response['data'][0]['embedding'],  # Using the same embedding for now
                             'metadata': {
-                                'text': chunk['text'],
-                                'document_id': r2r_response['id']
+                                'text': chunk,
+                                'document_id': file_id,
+                                'chunk_index': i,
+                                'filename': file.filename
                             }
                         })
-                        vector_ids.append(vector_id)
 
+                    logger.info(f"Upserting {len(vectors)} vectors to Pinecone")
+                    
+                    # Upsert to Pinecone
                     vector_index.upsert(vectors=vectors)
+                    
+                    vector_ids = [v['id'] for v in vectors]
+                    logger.info(f"Vectors upserted to Pinecone: {vector_ids}")
 
                     # Store document metadata in Supabase
                     doc_data = {
                         "id": file_id,
                         "name": file.filename,
-                        "type": file.content_type or f"text/{file.filename.rsplit('.', 1)[1].lower()}",
-                        "r2r_doc_id": r2r_response['id'],
+                        "type": file.content_type or "application/pdf",
                         "vector_ids": vector_ids,
                         "meta_info": {
                             "filename": file.filename,
-                            "upload_date": datetime.utcnow().isoformat()
+                            "upload_date": datetime.utcnow().isoformat(),
+                            "num_chunks": len(chunks)
                         }
                     }
                     
-                    supabase.table("documents").insert(doc_data).execute()
+                    logger.info(f"Inserting into Supabase: {doc_data}")
+                    response = supabase.table("documents").insert(doc_data).execute()
+                    logger.info(f"Supabase response: {response}")
 
                     # Clean up temporary file
                     os.remove(temp_path)
@@ -336,11 +363,13 @@ def upload_files():
                         "id": file_id,
                         "name": file.filename,
                         "status": "success",
-                        "r2r_doc_id": r2r_response['id']
+                        "num_chunks": len(chunks),
+                        "vector_ids": vector_ids
                     })
                     
                 except Exception as e:
                     logger.error(f"Error processing file {file.filename}: {str(e)}")
+                    logger.exception("Full traceback:")
                     results.append({
                         "name": file.filename,
                         "status": "error",
@@ -353,6 +382,30 @@ def upload_files():
 
     except Exception as e:
         logger.error(f"Error in upload_files: {str(e)}")
+        logger.exception("Full traceback:")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/test-pinecone", methods=["GET"])
+def test_pinecone():
+    """Test Pinecone connection and content"""
+    try:
+        # Test basic connection
+        stats = vector_index.describe_index_stats()
+        
+        # Get some sample vectors
+        query_response = vector_index.query(
+            vector=[0.0] * 1536,  # Dummy vector
+            top_k=5,
+            include_metadata=True
+        )
+        
+        return jsonify({
+            "status": "success",
+            "index_stats": stats,
+            "sample_vectors": query_response.matches if query_response.matches else []
+        })
+    except Exception as e:
+        logger.error(f"Pinecone test error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 @app.route("/files/<file_id>", methods=["DELETE"])

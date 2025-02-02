@@ -5,3 +5,4 @@ twilio
 httpx
 pinecone-client
 supabase
+PyPDF2
