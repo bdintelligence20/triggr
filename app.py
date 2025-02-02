@@ -76,7 +76,7 @@ except Exception as e:
 class WhatsAppAPI:
     @staticmethod
     async def send_message(to_number: str, message: str) -> dict:
-        """Send a message using WhatsApp Business API"""
+        """Send a message using WhatsApp Business API asynchronously"""
         url = f"https://graph.facebook.com/{APIConfig.WA_API_VERSION}/{APIConfig.WA_PHONE_ID}/messages"
         
         payload = {
@@ -97,8 +97,28 @@ class WhatsAppAPI:
                 response.raise_for_status()
                 return response.json()
             except httpx.HTTPError as e:
-                logger.error(f"WhatsApp API error: {str(e)}")
+                logger.error(f"WhatsApp API error (async): {str(e)}")
                 raise
+
+    @staticmethod
+    def send_message_sync(to_number: str, message: str) -> dict:
+        """Send a message using WhatsApp Business API synchronously"""
+        url = f"https://graph.facebook.com/{APIConfig.WA_API_VERSION}/{APIConfig.WA_PHONE_ID}/messages"
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": to_number,
+            "type": "text",
+            "text": {"preview_url": False, "body": message}
+        }
+        try:
+            with httpx.Client() as client:
+                response = client.post(url, json=payload, headers=APIConfig.wa_headers())
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPError as e:
+            logger.error(f"WhatsApp API error (sync): {str(e)}")
+            raise
 
 class MessageProcessor:
     @staticmethod
@@ -110,7 +130,12 @@ class MessageProcessor:
                 headers=APIConfig.r2r_headers(),
                 json={"input": text}
             )
-            return response.json()['data'][0]['embedding']
+            # Ensure we got a proper response before returning the embedding
+            response_json = response.json()
+            if "data" not in response_json:
+                logger.error(f"Unexpected response from R2R embeddings API: {response_json}")
+                raise Exception("Failed to get embeddings from R2R API")
+            return response_json['data'][0]['embedding']
 
     @staticmethod
     async def process_message(from_number: str, message_text: str) -> str:
@@ -170,7 +195,6 @@ class MessageProcessor:
                         ]
                     }
                 )
-                
             ai_response = response.json()['choices'][0]['message']['content']
 
             # Store AI response
@@ -233,7 +257,7 @@ def whatsapp_webhook():
                         
                         logger.info(f"Processing message from {from_number}: {message_text}")
                         
-                        # Send immediate acknowledgment
+                        # Send immediate acknowledgment using the synchronous method
                         try:
                             WhatsAppAPI.send_message_sync(
                                 from_number, 
@@ -249,7 +273,6 @@ def whatsapp_webhook():
         logger.exception("Full traceback:")
         return jsonify({"error": str(e)}), 500
 
-# Update WhatsAppAPI to include sync method
 # Create upload folder
 UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "./uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -281,6 +304,7 @@ def upload_files():
 
         for file in files:
             if file and allowed_file(file.filename):
+                temp_path = None
                 try:
                     logger.info(f"Processing file: {file.filename}")
                     
@@ -303,16 +327,20 @@ def upload_files():
 
                     logger.info(f"File content extracted, length: {len(content)}")
 
-                    # Process with R2R using verify=False for SSL
-                    client = httpx.Client(verify=False)
-                    r2r_response = client.post(
-                        f"{APIConfig.R2R_BASE_URL}/embeddings",
-                        headers=APIConfig.r2r_headers(),
-                        json={"input": content}
-                    ).json()
-
-                    logger.info(f"R2R embeddings generated")
-
+                    # Process with R2R using verify=False for SSL if needed
+                    with httpx.Client(verify=False) as client:
+                        r2r_response = client.post(
+                            f"{APIConfig.R2R_BASE_URL}/embeddings",
+                            headers=APIConfig.r2r_headers(),
+                            json={"input": content}
+                        )
+                    logger.info(f"R2R response status: {r2r_response.status_code}, content: {r2r_response.text}")
+                    r2r_json = r2r_response.json()
+                    
+                    # Ensure that we have the expected data
+                    if "data" not in r2r_json:
+                        raise Exception(f"R2R API did not return data: {r2r_json}")
+                    
                     # Create vectors for Pinecone
                     vectors = []
                     chunk_size = 1000  # Size of each text chunk
@@ -322,7 +350,7 @@ def upload_files():
                         vector_id = f"{file_id}-chunk-{i}"
                         vectors.append({
                             'id': vector_id,
-                            'values': r2r_response['data'][0]['embedding'],  # Using the same embedding for now
+                            'values': r2r_json['data'][0]['embedding'],  # Using the same embedding for now
                             'metadata': {
                                 'text': chunk,
                                 'document_id': file_id,
@@ -352,12 +380,13 @@ def upload_files():
                         }
                     }
                     
-                    logger.info(f"Inserting into Supabase: {doc_data}")
+                    logger.info(f"Inserting document into Supabase: {doc_data}")
                     response = supabase.table("documents").insert(doc_data).execute()
                     logger.info(f"Supabase response: {response}")
 
                     # Clean up temporary file
-                    os.remove(temp_path)
+                    if temp_path and os.path.exists(temp_path):
+                        os.remove(temp_path)
                     
                     results.append({
                         "id": file_id,
@@ -375,7 +404,7 @@ def upload_files():
                         "status": "error",
                         "error": str(e)
                     })
-                    if os.path.exists(temp_path):
+                    if temp_path and os.path.exists(temp_path):
                         os.remove(temp_path)
 
         return jsonify({"message": "Files processed", "files": results})
@@ -413,24 +442,26 @@ def delete_file(file_id):
     """Delete a file"""
     try:
         # Get document info from Supabase
-        doc = supabase.table("documents").select("*").eq("id", file_id).execute().data[0]
+        docs = supabase.table("documents").select("*").eq("id", file_id).execute().data
+        if not docs:
+            return jsonify({"error": "Document not found"}), 404
+        doc = docs[0]
         
-        if doc:
-            # Delete from R2R
+        # Delete from R2R if applicable
+        if 'r2r_doc_id' in doc:
             httpx.delete(
                 f"{APIConfig.R2R_BASE_URL}/documents/{doc['r2r_doc_id']}",
                 headers=APIConfig.r2r_headers()
             )
-            
-            # Delete vectors from Pinecone
-            vector_index.delete(ids=doc['vector_ids'])
-            
-            # Delete from Supabase
-            supabase.table("documents").delete().eq("id", file_id).execute()
-            
-            return jsonify({"message": "Document deleted successfully"})
-            
-        return jsonify({"error": "Document not found"}), 404
+        
+        # Delete vectors from Pinecone
+        vector_index.delete(ids=doc['vector_ids'])
+        
+        # Delete from Supabase
+        supabase.table("documents").delete().eq("id", file_id).execute()
+        
+        return jsonify({"message": "Document deleted successfully"})
+        
     except Exception as e:
         logger.error(f"Error deleting file: {str(e)}")
         return jsonify({"error": str(e)}), 500
