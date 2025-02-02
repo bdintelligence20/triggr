@@ -4,5 +4,5 @@ python-dotenv
 twilio
 httpx
 pinecone-client
-supabase-py
+supabase
 PyPDF2
