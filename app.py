@@ -240,32 +240,147 @@ def whatsapp_webhook():
         return jsonify({"error": str(e)}), 500
 
 # Update WhatsAppAPI to include sync method
-class WhatsAppAPI:
-    @staticmethod
-    def send_message_sync(to_number: str, message: str) -> dict:
-        """Send a message using WhatsApp Business API (synchronous version)"""
-        url = f"https://graph.facebook.com/{APIConfig.WA_API_VERSION}/{APIConfig.WA_PHONE_ID}/messages"
+# Create upload folder
+UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "./uploads")
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+def allowed_file(filename):
+    """Check if file type is allowed"""
+    ALLOWED_EXTENSIONS = {'txt', 'pdf', 'doc', 'docx', 'csv'}
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+@app.route("/files", methods=["GET"])
+def get_files():
+    """Get list of all files"""
+    try:
+        response = supabase.table("documents").select("*").execute()
+        return jsonify(response.data)
+    except Exception as e:
+        logger.error(f"Error getting files: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/upload-files", methods=["POST"])
+def upload_files():
+    """Handle file uploads"""
+    try:
+        if 'files' not in request.files:
+            return jsonify({"error": "No files provided"}), 400
+
+        files = request.files.getlist('files')
+        results = []
+
+        for file in files:
+            if file and allowed_file(file.filename):
+                try:
+                    # Create unique file ID
+                    file_id = hashlib.md5(f"{file.filename}-{datetime.utcnow().isoformat()}".encode()).hexdigest()
+                    temp_path = os.path.join(UPLOAD_FOLDER, file_id)
+                    file.save(temp_path)
+
+                    # Read file content
+                    with open(temp_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+
+                    # Process with R2R
+                    r2r_response = httpx.post(
+                        f"{APIConfig.R2R_BASE_URL}/documents",
+                        headers=APIConfig.r2r_headers(),
+                        json={
+                            "content": content,
+                            "metadata": {"filename": file.filename}
+                        }
+                    ).json()
+
+                    # Get embeddings from R2R
+                    embeddings_response = httpx.get(
+                        f"{APIConfig.R2R_BASE_URL}/documents/{r2r_response['id']}/embeddings",
+                        headers=APIConfig.r2r_headers()
+                    ).json()
+
+                    # Store in Pinecone
+                    vectors = []
+                    vector_ids = []
+                    for chunk in embeddings_response['chunks']:
+                        vector_id = hashlib.md5(chunk['text'].encode()).hexdigest()
+                        vectors.append({
+                            'id': vector_id,
+                            'values': chunk['embedding'],
+                            'metadata': {
+                                'text': chunk['text'],
+                                'document_id': r2r_response['id']
+                            }
+                        })
+                        vector_ids.append(vector_id)
+
+                    vector_index.upsert(vectors=vectors)
+
+                    # Store document metadata in Supabase
+                    doc_data = {
+                        "id": file_id,
+                        "name": file.filename,
+                        "type": file.content_type or f"text/{file.filename.rsplit('.', 1)[1].lower()}",
+                        "r2r_doc_id": r2r_response['id'],
+                        "vector_ids": vector_ids,
+                        "meta_info": {
+                            "filename": file.filename,
+                            "upload_date": datetime.utcnow().isoformat()
+                        }
+                    }
+                    
+                    supabase.table("documents").insert(doc_data).execute()
+
+                    # Clean up temporary file
+                    os.remove(temp_path)
+                    
+                    results.append({
+                        "id": file_id,
+                        "name": file.filename,
+                        "status": "success",
+                        "r2r_doc_id": r2r_response['id']
+                    })
+                    
+                except Exception as e:
+                    logger.error(f"Error processing file {file.filename}: {str(e)}")
+                    results.append({
+                        "name": file.filename,
+                        "status": "error",
+                        "error": str(e)
+                    })
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+
+        return jsonify({"message": "Files processed", "files": results})
+
+    except Exception as e:
+        logger.error(f"Error in upload_files: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/files/<file_id>", methods=["DELETE"])
+def delete_file(file_id):
+    """Delete a file"""
+    try:
+        # Get document info from Supabase
+        doc = supabase.table("documents").select("*").eq("id", file_id).execute().data[0]
         
-        payload = {
-            "messaging_product": "whatsapp",
-            "recipient_type": "individual",
-            "to": to_number,
-            "type": "text",
-            "text": {"preview_url": False, "body": message}
-        }
-        
-        try:
-            response = httpx.post(
-                url, 
-                json=payload, 
-                headers=APIConfig.wa_headers(),
-                timeout=10
+        if doc:
+            # Delete from R2R
+            httpx.delete(
+                f"{APIConfig.R2R_BASE_URL}/documents/{doc['r2r_doc_id']}",
+                headers=APIConfig.r2r_headers()
             )
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPError as e:
-            logger.error(f"WhatsApp API error: {str(e)}")
-            raise
+            
+            # Delete vectors from Pinecone
+            vector_index.delete(ids=doc['vector_ids'])
+            
+            # Delete from Supabase
+            supabase.table("documents").delete().eq("id", file_id).execute()
+            
+            return jsonify({"message": "Document deleted successfully"})
+            
+        return jsonify({"error": "Document not found"}), 404
+    except Exception as e:
+        logger.error(f"Error deleting file: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
