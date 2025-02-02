@@ -1,8 +1,7 @@
 flask
 flask-cors
-sqlalchemy
 python-dotenv
 twilio
-pinecone-client
-psycopg2-binary
 httpx
+pinecone-client
+supabase

@@ -1,9 +1,5 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from sqlalchemy import create_engine, Column, String, DateTime
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import QueuePool
 import os
 from dotenv import load_dotenv
 from twilio.rest import Client
@@ -12,26 +8,54 @@ import hashlib
 import json
 import httpx
 from pinecone import Pinecone
+from supabase import create_client, Client
 
 # Load environment variables
 load_dotenv()
 
-# Initialize Flask app with Supabase connection
-DATABASE_URL = f"postgresql://{os.getenv('SUPABASE_USER')}:{os.getenv('SUPABASE_PASSWORD')}@{os.getenv('SUPABASE_HOST')}:{os.getenv('SUPABASE_PORT')}/{os.getenv('SUPABASE_DATABASE')}"
-
+# Initialize Flask app
 app = Flask(__name__)
 CORS(app)
 
-# Initialize database
-engine = create_engine(
-    DATABASE_URL,
-    pool_size=5,
-    max_overflow=10,
-    pool_timeout=30,
-    pool_recycle=1800
-)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+class SupabaseManager:
+    def __init__(self, client: Client):
+        self.client = client
+    
+    async def create_document(self, data, user_id, workspace_id=None):
+        """Create document with proper ownership"""
+        doc_data = {
+            **data,
+            "owner_id": user_id,
+            "workspace_id": workspace_id,
+            "is_public": False
+        }
+        return self.client.table("documents").insert(doc_data).execute()
+    
+    async def get_user_documents(self, user_id):
+        """Get all documents accessible by user"""
+        return self.client.table("documents")\
+            .select("*")\
+            .or_(f"owner_id.eq.{user_id},is_public.eq.true")\
+            .is_("deleted_at", "null")\
+            .execute()
+    
+    async def get_chat_history(self, session_id, limit=10):
+        """Get chat history with context using our custom function"""
+        return self.client.rpc(
+            'get_chat_history_with_context',
+            {"p_session_id": session_id, "p_limit": limit}
+        ).execute()
+    
+    async def soft_delete_document(self, doc_id, user_id):
+        """Soft delete a document"""
+        return self.client.table("documents")\
+            .update({"deleted_at": datetime.utcnow().isoformat()})\
+            .eq("id", doc_id)\
+            .eq("owner_id", user_id)\
+            .execute()
+
+# Initialize Supabase manager
+supabase_manager = SupabaseManager(supabase)
 
 # Initialize Pinecone
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
@@ -45,31 +69,6 @@ R2R_HEADERS = {
     "Authorization": f"Bearer {R2R_API_KEY}",
     "Content-Type": "application/json"
 }
-
-# Database Models
-class Document(Base):
-    __tablename__ = "documents"
-
-    id = Column(String, primary_key=True)
-    name = Column(String, nullable=False)
-    type = Column(String, nullable=False)
-    r2r_doc_id = Column(String)  # R2R document ID
-    vector_ids = Column(String)  # JSON array of vector IDs
-    metadata = Column(String)  # JSON string of metadata
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-class ChatMessage(Base):
-    __tablename__ = "chat_messages"
-
-    id = Column(String, primary_key=True)
-    session_id = Column(String, nullable=False)  # e.g., phone number for WhatsApp
-    role = Column(String, nullable=False)
-    content = Column(String, nullable=False)
-    metadata = Column(String)  # JSON string of metadata
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-# Create tables
-Base.metadata.create_all(engine)
 
 # Initialize Twilio
 twilio_client = Client(
@@ -133,27 +132,23 @@ async def upload_files():
                 # Process with R2R and store vectors
                 r2r_doc_id, vector_ids = await process_document_with_r2r(content, file.filename)
                 
-                # Store document metadata
-                doc_id = hashlib.md5(f"{file.filename}-{datetime.utcnow().isoformat()}".encode()).hexdigest()
-                
-                doc = Document(
-                    id=doc_id,
-                    name=file.filename,
-                    type=file.content_type or 'text/plain',
-                    r2r_doc_id=r2r_doc_id,
-                    vector_ids=json.dumps(vector_ids),
-                    metadata=json.dumps({
+                # Store document metadata in Supabase
+                doc_data = {
+                    "id": hashlib.md5(f"{file.filename}-{datetime.utcnow().isoformat()}".encode()).hexdigest(),
+                    "name": file.filename,
+                    "type": file.content_type or 'text/plain',
+                    "r2r_doc_id": r2r_doc_id,
+                    "vector_ids": vector_ids,
+                    "meta_info": {
                         "filename": file.filename,
                         "upload_date": datetime.utcnow().isoformat()
-                    })
-                )
-
-                db = SessionLocal()
-                db.add(doc)
-                db.commit()
+                    }
+                }
+                
+                supabase.table("documents").insert(doc_data).execute()
                 
                 results.append({
-                    "id": doc_id,
+                    "id": doc_data["id"],
                     "name": file.filename,
                     "status": "success",
                     "r2r_doc_id": r2r_doc_id
@@ -172,46 +167,47 @@ async def upload_files():
         return jsonify({"error": str(e)}), 500
 
 @app.route("/documents", methods=["GET"])
-def get_documents():
+async def get_documents():
     try:
-        db = SessionLocal()
-        documents = db.query(Document).all()
-        return jsonify([{
-            'id': doc.id,
-            'name': doc.name,
-            'type': doc.type,
-            'r2r_doc_id': doc.r2r_doc_id,
-            'created_at': doc.created_at.isoformat(),
-            'metadata': json.loads(doc.metadata) if doc.metadata else {}
-        } for doc in documents])
+        # Get user ID from auth header
+        auth_header = request.headers.get('Authorization')
+        if not auth_header:
+            return jsonify({"error": "Authorization required"}), 401
+        
+        user_id = supabase.auth.get_user(auth_header.split(' ')[1]).user.id
+        response = await supabase_manager.get_user_documents(user_id)
+        return jsonify(response.data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/documents/<document_id>", methods=["DELETE"])
 async def delete_document(document_id):
     try:
-        db = SessionLocal()
-        doc = db.query(Document).filter(Document.id == document_id).first()
+        # Get user ID from auth header
+        auth_header = request.headers.get('Authorization')
+        if not auth_header:
+            return jsonify({"error": "Authorization required"}), 401
         
-        if doc:
-            # Delete from R2R
-            async with httpx.AsyncClient() as client:
-                await client.delete(
-                    f"{R2R_BASE_URL}/documents/{doc.r2r_doc_id}",
-                    headers=R2R_HEADERS
-                )
-            
-            # Delete vectors from Pinecone
-            vector_ids = json.loads(doc.vector_ids)
-            index.delete(ids=vector_ids)
-            
-            # Delete from database
-            db.delete(doc)
-            db.commit()
-            
-            return jsonify({"message": "Document deleted successfully"})
-            
-        return jsonify({"error": "Document not found"}), 404
+        user_id = supabase.auth.get_user(auth_header.split(' ')[1]).user.id
+        
+        # Soft delete in Supabase
+        await supabase_manager.soft_delete_document(document_id, user_id)
+        
+        # Get document info for cleanup
+        doc = supabase.table("documents").select("*").eq("id", document_id).single().execute().data
+        
+        # Delete from R2R
+        async with httpx.AsyncClient() as client:
+            await client.delete(
+                f"{R2R_BASE_URL}/documents/{doc['r2r_doc_id']}",
+                headers=R2R_HEADERS
+            )
+        
+        # Delete vectors from Pinecone
+        if doc['vector_ids']:
+            index.delete(ids=doc['vector_ids'])
+        
+        return jsonify({"message": "Document deleted successfully"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -220,26 +216,24 @@ async def whatsapp_webhook():
     try:
         from_number = request.form.get("From")
         query = request.form.get("Body")
-        
-        db = SessionLocal()
 
-        # Store user message
-        user_message = ChatMessage(
-            id=hashlib.md5(f"{from_number}-{datetime.utcnow().isoformat()}".encode()).hexdigest(),
-            session_id=from_number,
-            role="user",
-            content=query,
-            created_at=datetime.utcnow()
-        )
-        db.add(user_message)
-        db.commit()
+        # Store message in Supabase
+        message_data = {
+            "id": hashlib.md5(f"{from_number}-{datetime.utcnow().isoformat()}".encode()).hexdigest(),
+            "session_id": from_number,
+            "role": "user",
+            "content": query,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        supabase.table("messages").insert(message_data).execute()
 
         # Get chat history
-        chat_history = db.query(ChatMessage)\
-            .filter(ChatMessage.session_id == from_number)\
-            .order_by(ChatMessage.created_at.desc())\
+        chat_history = supabase.table("messages")\
+            .select("*")\
+            .eq("session_id", from_number)\
+            .order("timestamp", desc=True)\
             .limit(10)\
-            .all()
+            .execute()
 
         # Get relevant vectors from Pinecone
         query_response = index.query(
@@ -258,7 +252,8 @@ async def whatsapp_webhook():
                 json={
                     "messages": [
                         {"role": "system", "content": f"Use this context to help answer: {context}"},
-                        *[{"role": msg.role, "content": msg.content} for msg in reversed(chat_history)],
+                        *[{"role": msg["role"], "content": msg["content"]} 
+                          for msg in reversed(chat_history.data)],
                         {"role": "user", "content": query}
                     ],
                     "stream": False
@@ -269,15 +264,14 @@ async def whatsapp_webhook():
         assistant_response = r2r_response['choices'][0]['message']['content']
 
         # Store assistant message
-        assistant_message = ChatMessage(
-            id=hashlib.md5(f"{from_number}-{datetime.utcnow().isoformat()}-assistant".encode()).hexdigest(),
-            session_id=from_number,
-            role="assistant",
-            content=assistant_response,
-            created_at=datetime.utcnow()
-        )
-        db.add(assistant_message)
-        db.commit()
+        assistant_message = {
+            "id": hashlib.md5(f"{from_number}-{datetime.utcnow().isoformat()}-assistant".encode()).hexdigest(),
+            "session_id": from_number,
+            "role": "assistant",
+            "content": assistant_response,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        supabase.table("messages").insert(assistant_message).execute()
 
         # Send WhatsApp response
         twilio_client.messages.create(
