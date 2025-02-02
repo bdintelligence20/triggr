@@ -17,6 +17,12 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
+# Initialize Supabase
+supabase: Client = create_client(
+    supabase_url=os.getenv("SUPABASE_URL"),
+    supabase_key=os.getenv("SUPABASE_SERVICE_KEY")
+)
+
 class SupabaseManager:
     def __init__(self, client: Client):
         self.client = client
