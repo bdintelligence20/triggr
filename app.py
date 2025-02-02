@@ -1,6 +1,8 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, Column, String, DateTime
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
 import os
 from dotenv import load_dotenv
@@ -8,13 +10,8 @@ from twilio.rest import Client
 from datetime import datetime
 import hashlib
 import json
-import asyncio
-from r2r.core.models import ChatMessage
-from r2r.core.store import DocumentStore, MessageStore
-from r2r.core.index import VectorIndex
-from r2r.core.chunking import TextChunker
-from r2r.core.embeddings import OpenAIEmbeddings
-from r2r.core.llm import OpenAIChat
+import httpx
+from pinecone import Pinecone
 
 # Load environment variables
 load_dotenv()
@@ -23,58 +20,102 @@ load_dotenv()
 DATABASE_URL = f"postgresql://{os.getenv('SUPABASE_USER')}:{os.getenv('SUPABASE_PASSWORD')}@{os.getenv('SUPABASE_HOST')}:{os.getenv('SUPABASE_PORT')}/{os.getenv('SUPABASE_DATABASE')}"
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    'poolclass': QueuePool,
-    'pool_size': 5,
-    'max_overflow': 10,
-    'pool_timeout': 30,
-    'pool_recycle': 1800,
-}
 CORS(app)
 
-# Initialize R2R components
-document_store = DocumentStore(
-    connection_string=DATABASE_URL,
-    table_name="documents"
+# Initialize database
+engine = create_engine(
+    DATABASE_URL,
+    pool_size=5,
+    max_overflow=10,
+    pool_timeout=30,
+    pool_recycle=1800
 )
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
-message_store = MessageStore(
-    connection_string=DATABASE_URL,
-    table_name="messages"
-)
+# Initialize Pinecone
+pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+index_name = "triggrdocstore"
+index = pc.Index(index_name)
 
-vector_index = VectorIndex(
-    connection_string=DATABASE_URL,
-    embedding_model=OpenAIEmbeddings(api_key=os.getenv("OPENAI_API_KEY")),
-    collection_name="triggrdocstore"
-)
+# Initialize R2R API
+R2R_API_KEY = os.getenv("R2R_API_KEY")
+R2R_BASE_URL = "https://api.sciphi.ai/v3"
+R2R_HEADERS = {
+    "Authorization": f"Bearer {R2R_API_KEY}",
+    "Content-Type": "application/json"
+}
 
-text_chunker = TextChunker(
-    chunk_size=500,
-    chunk_overlap=100
-)
+# Database Models
+class Document(Base):
+    __tablename__ = "documents"
 
-llm = OpenAIChat(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    model="gpt-4-turbo-preview",
-    temperature=0.7
-)
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False)
+    type = Column(String, nullable=False)
+    r2r_doc_id = Column(String)  # R2R document ID
+    vector_ids = Column(String)  # JSON array of vector IDs
+    metadata = Column(String)  # JSON string of metadata
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-# Initialize Twilio client
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id = Column(String, primary_key=True)
+    session_id = Column(String, nullable=False)  # e.g., phone number for WhatsApp
+    role = Column(String, nullable=False)
+    content = Column(String, nullable=False)
+    metadata = Column(String)  # JSON string of metadata
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+# Create tables
+Base.metadata.create_all(engine)
+
+# Initialize Twilio
 twilio_client = Client(
     os.getenv("TWILIO_ACCOUNT_SID"),
     os.getenv("TWILIO_AUTH_TOKEN")
 )
 
-# Create upload folder
-UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "./uploads")
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+async def process_document_with_r2r(content, filename):
+    """Process document with R2R and store embeddings in Pinecone"""
+    async with httpx.AsyncClient() as client:
+        # Upload to R2R
+        r2r_response = await client.post(
+            f"{R2R_BASE_URL}/documents",
+            headers=R2R_HEADERS,
+            json={
+                "content": content,
+                "metadata": {"filename": filename}
+            }
+        )
+        r2r_doc = r2r_response.json()
+        
+        # Get embeddings from R2R
+        embeddings_response = await client.get(
+            f"{R2R_BASE_URL}/documents/{r2r_doc['id']}/embeddings",
+            headers=R2R_HEADERS
+        )
+        embeddings_data = embeddings_response.json()
 
-def allowed_file(filename):
-    """Check if file type is allowed"""
-    ALLOWED_EXTENSIONS = {'txt', 'pdf', 'doc', 'docx', 'csv'}
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+        # Store in Pinecone
+        vectors = []
+        vector_ids = []
+        for chunk in embeddings_data['chunks']:
+            vector_id = hashlib.md5(chunk['text'].encode()).hexdigest()
+            vectors.append({
+                'id': vector_id,
+                'values': chunk['embedding'],
+                'metadata': {
+                    'text': chunk['text'],
+                    'document_id': r2r_doc['id']
+                }
+            })
+            vector_ids.append(vector_id)
+
+        index.upsert(vectors=vectors)
+        
+        return r2r_doc['id'], vector_ids
 
 @app.route("/upload-files", methods=["POST"])
 async def upload_files():
@@ -86,53 +127,44 @@ async def upload_files():
         results = []
 
         for file in files:
-            if file and allowed_file(file.filename):
-                try:
-                    # Create a unique file ID
-                    file_id = hashlib.md5(f"{file.filename}-{datetime.utcnow().isoformat()}".encode()).hexdigest()
-                    temp_path = os.path.join(UPLOAD_FOLDER, file_id)
-                    file.save(temp_path)
-
-                    # Process file content
-                    with open(temp_path, 'rb') as f:
-                        content = f.read()
-
-                    # Create document in R2R
-                    document = await document_store.create_document(
-                        content=content,
-                        metadata={
-                            "filename": file.filename,
-                            "file_id": file_id,
-                            "content_type": file.content_type or f"text/{file.filename.rsplit('.', 1)[1].lower()}"
-                        }
-                    )
-
-                    # Chunk and index content
-                    chunks = text_chunker.chunk(content.decode('utf-8', errors='ignore'))
-                    
-                    # Add chunks to vector index
-                    await vector_index.add_texts(
-                        texts=chunks,
-                        metadata={"document_id": document.id}
-                    )
-
-                    results.append({
-                        "id": document.id,
-                        "name": file.filename,
-                        "status": "success"
+            try:
+                content = file.read().decode('utf-8')
+                
+                # Process with R2R and store vectors
+                r2r_doc_id, vector_ids = await process_document_with_r2r(content, file.filename)
+                
+                # Store document metadata
+                doc_id = hashlib.md5(f"{file.filename}-{datetime.utcnow().isoformat()}".encode()).hexdigest()
+                
+                doc = Document(
+                    id=doc_id,
+                    name=file.filename,
+                    type=file.content_type or 'text/plain',
+                    r2r_doc_id=r2r_doc_id,
+                    vector_ids=json.dumps(vector_ids),
+                    metadata=json.dumps({
+                        "filename": file.filename,
+                        "upload_date": datetime.utcnow().isoformat()
                     })
+                )
 
-                    # Clean up
-                    os.remove(temp_path)
-
-                except Exception as e:
-                    results.append({
-                        "name": file.filename,
-                        "status": "error",
-                        "error": str(e)
-                    })
-                    if os.path.exists(temp_path):
-                        os.remove(temp_path)
+                db = SessionLocal()
+                db.add(doc)
+                db.commit()
+                
+                results.append({
+                    "id": doc_id,
+                    "name": file.filename,
+                    "status": "success",
+                    "r2r_doc_id": r2r_doc_id
+                })
+                
+            except Exception as e:
+                results.append({
+                    "name": file.filename,
+                    "status": "error",
+                    "error": str(e)
+                })
 
         return jsonify({"message": "Files processed", "files": results})
 
@@ -140,15 +172,17 @@ async def upload_files():
         return jsonify({"error": str(e)}), 500
 
 @app.route("/documents", methods=["GET"])
-async def get_documents():
+def get_documents():
     try:
-        documents = await document_store.list_documents()
+        db = SessionLocal()
+        documents = db.query(Document).all()
         return jsonify([{
             'id': doc.id,
-            'name': doc.metadata.get('filename'),
-            'type': doc.metadata.get('content_type'),
+            'name': doc.name,
+            'type': doc.type,
+            'r2r_doc_id': doc.r2r_doc_id,
             'created_at': doc.created_at.isoformat(),
-            'metadata': doc.metadata
+            'metadata': json.loads(doc.metadata) if doc.metadata else {}
         } for doc in documents])
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -156,9 +190,28 @@ async def get_documents():
 @app.route("/documents/<document_id>", methods=["DELETE"])
 async def delete_document(document_id):
     try:
-        await document_store.delete_document(document_id)
-        await vector_index.delete_texts(filter={"document_id": document_id})
-        return jsonify({"message": "Document deleted successfully"})
+        db = SessionLocal()
+        doc = db.query(Document).filter(Document.id == document_id).first()
+        
+        if doc:
+            # Delete from R2R
+            async with httpx.AsyncClient() as client:
+                await client.delete(
+                    f"{R2R_BASE_URL}/documents/{doc.r2r_doc_id}",
+                    headers=R2R_HEADERS
+                )
+            
+            # Delete vectors from Pinecone
+            vector_ids = json.loads(doc.vector_ids)
+            index.delete(ids=vector_ids)
+            
+            # Delete from database
+            db.delete(doc)
+            db.commit()
+            
+            return jsonify({"message": "Document deleted successfully"})
+            
+        return jsonify({"error": "Document not found"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -167,59 +220,64 @@ async def whatsapp_webhook():
     try:
         from_number = request.form.get("From")
         query = request.form.get("Body")
+        
+        db = SessionLocal()
 
-        # Create chat message
-        chat_message = ChatMessage(
+        # Store user message
+        user_message = ChatMessage(
+            id=hashlib.md5(f"{from_number}-{datetime.utcnow().isoformat()}".encode()).hexdigest(),
+            session_id=from_number,
             role="user",
             content=query,
-            metadata={"phone_number": from_number}
+            created_at=datetime.utcnow()
         )
-        await message_store.create_message(chat_message)
-
-        # Get relevant context
-        relevant_chunks = await vector_index.similarity_search(
-            query=query,
-            k=5
-        )
+        db.add(user_message)
+        db.commit()
 
         # Get chat history
-        chat_history = await message_store.get_messages(
-            filter={"metadata.phone_number": from_number},
-            limit=5
+        chat_history = db.query(ChatMessage)\
+            .filter(ChatMessage.session_id == from_number)\
+            .order_by(ChatMessage.created_at.desc())\
+            .limit(10)\
+            .all()
+
+        # Get relevant vectors from Pinecone
+        query_response = index.query(
+            vector=await get_embedding(query),
+            top_k=5,
+            include_metadata=True
         )
+        
+        context = " ".join([match.metadata['text'] for match in query_response.matches])
 
-        # Prepare messages for LLM
-        messages = [
-            {
-                "role": "system",
-                "content": f"You are a helpful AI assistant. Use this context to help answer the user's question, but don't mention that you're using any context: {' '.join([chunk.page_content for chunk in relevant_chunks])}"
-            }
-        ]
+        # Query R2R with context and history
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{R2R_BASE_URL}/chat/completions",
+                headers=R2R_HEADERS,
+                json={
+                    "messages": [
+                        {"role": "system", "content": f"Use this context to help answer: {context}"},
+                        *[{"role": msg.role, "content": msg.content} for msg in reversed(chat_history)],
+                        {"role": "user", "content": query}
+                    ],
+                    "stream": False
+                }
+            )
+            r2r_response = response.json()
+            
+        assistant_response = r2r_response['choices'][0]['message']['content']
 
-        # Add chat history
-        for msg in chat_history:
-            messages.append({
-                "role": msg.role,
-                "content": msg.content
-            })
-
-        # Add current query
-        messages.append({
-            "role": "user",
-            "content": query
-        })
-
-        # Get response from LLM
-        response = await llm.chat_complete(messages=messages)
-        assistant_response = response.choices[0].message.content
-
-        # Save assistant message
+        # Store assistant message
         assistant_message = ChatMessage(
+            id=hashlib.md5(f"{from_number}-{datetime.utcnow().isoformat()}-assistant".encode()).hexdigest(),
+            session_id=from_number,
             role="assistant",
             content=assistant_response,
-            metadata={"phone_number": from_number}
+            created_at=datetime.utcnow()
         )
-        await message_store.create_message(assistant_message)
+        db.add(assistant_message)
+        db.commit()
 
         # Send WhatsApp response
         twilio_client.messages.create(
@@ -232,6 +290,16 @@ async def whatsapp_webhook():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+async def get_embedding(text):
+    """Get embedding from R2R"""
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{R2R_BASE_URL}/embeddings",
+            headers=R2R_HEADERS,
+            json={"input": text}
+        )
+        return response.json()['data'][0]['embedding']
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
