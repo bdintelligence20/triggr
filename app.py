@@ -31,9 +31,9 @@ class APIConfig:
     PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
     PINECONE_INDEX = "triggrdocstore"
 
-    # R2R
+    # R2R (Documents API)
     R2R_API_KEY = os.getenv("R2R_API_KEY")
-    R2R_BASE_URL = "https://api.sciphi.ai/v3"
+    R2R_BASE_URL = "https://api.sciphi.ai/v3"  # Base URL remains; endpoints will change below
     
     # WhatsApp
     WA_API_VERSION = "v17.0"
@@ -123,25 +123,27 @@ class WhatsAppAPI:
 class MessageProcessor:
     @staticmethod
     async def get_embedding(text: str) -> list:
-        """Get embedding from R2R API"""
+        """
+        Get embedding from R2R API.
+        Updated to use the '/documents/embeddings' endpoint as per the documentation.
+        """
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"{APIConfig.R2R_BASE_URL}/embeddings",
+                f"{APIConfig.R2R_BASE_URL}/documents/embeddings",
                 headers=APIConfig.r2r_headers(),
                 json={"input": text}
             )
-            # Ensure we got a proper response before returning the embedding
             response_json = response.json()
             if "data" not in response_json:
                 logger.error(f"Unexpected response from R2R embeddings API: {response_json}")
-                raise Exception("Failed to get embeddings from R2R API")
+                raise Exception(f"R2R API did not return data: {response_json}")
             return response_json['data'][0]['embedding']
 
     @staticmethod
     async def process_message(from_number: str, message_text: str) -> str:
         """Process incoming message and generate response"""
         try:
-            # Store user message
+            # Store user message in Supabase
             message_id = hashlib.md5(
                 f"{from_number}-{datetime.utcnow().isoformat()}".encode()
             ).hexdigest()
@@ -176,7 +178,7 @@ class MessageProcessor:
                 for match in search_results.matches
             ])
 
-            # Generate response using R2R
+            # Generate response using R2R chat completions (endpoint remains unchanged)
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     f"{APIConfig.R2R_BASE_URL}/chat/completions",
@@ -197,7 +199,7 @@ class MessageProcessor:
                 )
             ai_response = response.json()['choices'][0]['message']['content']
 
-            # Store AI response
+            # Store AI response in Supabase
             assistant_message = {
                 "id": hashlib.md5(
                     f"{from_number}-{datetime.utcnow().isoformat()}-assistant".encode()
@@ -330,7 +332,7 @@ def upload_files():
                     # Process with R2R using verify=False for SSL if needed
                     with httpx.Client(verify=False) as client:
                         r2r_response = client.post(
-                            f"{APIConfig.R2R_BASE_URL}/embeddings",
+                            f"{APIConfig.R2R_BASE_URL}/documents/embeddings",
                             headers=APIConfig.r2r_headers(),
                             json={"input": content}
                         )
