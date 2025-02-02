@@ -6,7 +6,7 @@ twilio
 pinecone-client
 psycopg2-binary
 supabase
-r2r
+r2r[core,ingestion-bundle]
 openai
 aiofiles
 alembic
