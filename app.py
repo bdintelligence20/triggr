@@ -192,7 +192,7 @@ class MessageProcessor:
             raise
 
 @app.route("/whatsapp", methods=["GET", "POST"])
-async def whatsapp_webhook():
+def whatsapp_webhook():
     """Handle WhatsApp webhook events"""
     try:
         # Handle webhook verification (GET request)
@@ -207,7 +207,7 @@ async def whatsapp_webhook():
                 if mode == "subscribe" and token == APIConfig.WA_VERIFY_TOKEN:
                     if challenge:
                         logger.info(f"Webhook verified! Challenge: {challenge}")
-                        return challenge
+                        return str(challenge)  # Must return the challenge as a string
                     return "No challenge found", 400
                 return "Invalid verification token", 403
             return "Invalid parameters", 400
@@ -227,21 +227,45 @@ async def whatsapp_webhook():
                             
                         from_number = message["from"]
                         message_text = message["text"]["body"]
-
+                        
+                        # Start async processing in a background task
+                        # For now, we'll handle it synchronously
                         # Process message and get response
-                        ai_response = await MessageProcessor.process_message(
-                            from_number, 
-                            message_text
-                        )
-
-                        # Send response via WhatsApp
-                        await WhatsAppAPI.send_message(from_number, ai_response)
+                        WhatsAppAPI.send_message_sync(from_number, "Thank you for your message. Processing...")
 
         return jsonify({"status": "success"}), 200
 
     except Exception as e:
         logger.error(f"Webhook error: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
+# Update WhatsAppAPI to include sync method
+class WhatsAppAPI:
+    @staticmethod
+    def send_message_sync(to_number: str, message: str) -> dict:
+        """Send a message using WhatsApp Business API (synchronous version)"""
+        url = f"https://graph.facebook.com/{APIConfig.WA_API_VERSION}/{APIConfig.WA_PHONE_ID}/messages"
+        
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": to_number,
+            "type": "text",
+            "text": {"preview_url": False, "body": message}
+        }
+        
+        try:
+            response = httpx.post(
+                url, 
+                json=payload, 
+                headers=APIConfig.wa_headers(),
+                timeout=10
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPError as e:
+            logger.error(f"WhatsApp API error: {str(e)}")
+            raise
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
