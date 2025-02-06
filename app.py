@@ -96,8 +96,16 @@ def allowed_file(filename):
     ALLOWED_EXTENSIONS = {'txt', 'pdf', 'doc', 'docx', 'csv'}
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-@app.route("/documents", methods=["GET"])
-async def get_documents():
+@app.route("/", methods=["GET"])
+async def root():
+    """Root endpoint"""
+    return jsonify({
+        "status": "ok",
+        "message": "R2R API Service is running"
+    })
+
+@app.route("/files", methods=["GET"])
+async def get_files():
     """Get list of all documents from R2R"""
     try:
         async with httpx.AsyncClient(verify=False) as client:
@@ -110,8 +118,8 @@ async def get_documents():
         logger.error(f"Error getting documents: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-@app.route("/upload", methods=["POST"])
-async def upload_document():
+@app.route("/upload-files", methods=["POST"])
+async def upload_files():
     """Handle document uploads to R2R"""
     try:
         if 'file' not in request.files:
