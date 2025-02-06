@@ -27,7 +27,7 @@ class APIConfig:
     @classmethod
     def r2r_headers(cls):
         return {
-            "X-API-Key": cls.R2R_API_KEY,
+            "Authorization": f"Bearer {cls.R2R_API_KEY}",
             "Content-Type": "application/json"
         }
 
@@ -121,9 +121,10 @@ def get_files():
                 headers=APIConfig.r2r_headers()
             )
             
-            # Log response status and headers
+            # Log response status, headers, and content
             logger.info(f"R2R API Response Status: {response.status_code}")
             logger.info(f"R2R API Response Headers: {dict(response.headers)}")
+            logger.info(f"R2R API Response Content: {response.text}")
             
             if response.status_code == 403:
                 logger.error("Authentication failed with R2R API")
