@@ -33,10 +33,10 @@ class APIConfig:
 
 class DocumentProcessor:
     @staticmethod
-    async def get_embedding(text: str) -> list:
+    def get_embedding(text: str) -> list:
         """Get embedding for a text using R2R API"""
-        async with httpx.AsyncClient(verify=False) as client:
-            response = await client.post(
+        with httpx.Client(verify=False) as client:
+            response = client.post(
                 f"{APIConfig.R2R_BASE_URL}/documents/embeddings",
                 headers=APIConfig.r2r_headers(),
                 json={"input": text}
@@ -48,15 +48,15 @@ class DocumentProcessor:
             return response_json['data'][0]['embedding']
 
     @staticmethod
-    async def process_query(query_text: str) -> str:
+    def process_query(query_text: str) -> str:
         """Process a query using R2R chat completions"""
         try:
             # Get embedding for context retrieval
-            embedding = await DocumentProcessor.get_embedding(query_text)
+            embedding = DocumentProcessor.get_embedding(query_text)
             
-            # Use R2R's document search endpoint
-            async with httpx.AsyncClient(verify=False) as client:
-                search_response = await client.post(
+            with httpx.Client(verify=False) as client:
+                # Use R2R's document search endpoint
+                search_response = client.post(
                     f"{APIConfig.R2R_BASE_URL}/documents/search",
                     headers=APIConfig.r2r_headers(),
                     json={
@@ -71,7 +71,7 @@ class DocumentProcessor:
                 context = " ".join([result['text'] for result in search_results.get('data', [])])
                 
                 # Generate response using chat completions
-                response = await client.post(
+                response = client.post(
                     f"{APIConfig.R2R_BASE_URL}/chat/completions",
                     headers=APIConfig.r2r_headers(),
                     json={
@@ -97,7 +97,7 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 @app.route("/", methods=["GET"])
-async def root():
+def root():
     """Root endpoint"""
     return jsonify({
         "status": "ok",
@@ -105,11 +105,11 @@ async def root():
     })
 
 @app.route("/files", methods=["GET"])
-async def get_files():
+def get_files():
     """Get list of all documents from R2R"""
     try:
-        async with httpx.AsyncClient(verify=False) as client:
-            response = await client.get(
+        with httpx.Client(verify=False) as client:
+            response = client.get(
                 f"{APIConfig.R2R_BASE_URL}/documents",
                 headers=APIConfig.r2r_headers()
             )
@@ -119,75 +119,85 @@ async def get_files():
         return jsonify({"error": str(e)}), 500
 
 @app.route("/upload-files", methods=["POST"])
-async def upload_files():
+def upload_files():
     """Handle document uploads to R2R"""
     try:
-        if 'file' not in request.files:
-            return jsonify({"error": "No file provided"}), 400
+        if 'files' not in request.files:
+            return jsonify({"error": "No files provided"}), 400
 
-        file = request.files['file']
-        if file and allowed_file(file.filename):
-            temp_path = None
-            try:
-                # Create a unique file ID
-                file_id = hashlib.md5(f"{file.filename}-{datetime.utcnow().isoformat()}".encode()).hexdigest()
-                temp_path = os.path.join(UPLOAD_FOLDER, file_id)
-                file.save(temp_path)
+        files = request.files.getlist('files')
+        results = []
 
-                # Extract file content
-                if file.filename.endswith('.pdf'):
-                    import PyPDF2
-                    with open(temp_path, 'rb') as pdf_file:
-                        pdf_reader = PyPDF2.PdfReader(pdf_file)
-                        content = ""
-                        for page in pdf_reader.pages:
-                            content += page.extract_text() + "\n"
-                else:
-                    with open(temp_path, 'rb') as f:
-                        content = f.read().decode('utf-8', errors='ignore')
+        for file in files:
+            if file and allowed_file(file.filename):
+                temp_path = None
+                try:
+                    # Create a unique file ID
+                    file_id = hashlib.md5(f"{file.filename}-{datetime.utcnow().isoformat()}".encode()).hexdigest()
+                    temp_path = os.path.join(UPLOAD_FOLDER, file_id)
+                    file.save(temp_path)
 
-                # Upload to R2R
-                async with httpx.AsyncClient(verify=False) as client:
-                    response = await client.post(
-                        f"{APIConfig.R2R_BASE_URL}/documents",
-                        headers=APIConfig.r2r_headers(),
-                        json={
-                            "content": content,
-                            "metadata": {
-                                "filename": file.filename,
-                                "upload_date": datetime.utcnow().isoformat()
+                    # Extract file content
+                    if file.filename.endswith('.pdf'):
+                        import PyPDF2
+                        with open(temp_path, 'rb') as pdf_file:
+                            pdf_reader = PyPDF2.PdfReader(pdf_file)
+                            content = ""
+                            for page in pdf_reader.pages:
+                                content += page.extract_text() + "\n"
+                    else:
+                        with open(temp_path, 'rb') as f:
+                            content = f.read().decode('utf-8', errors='ignore')
+
+                    # Upload to R2R
+                    with httpx.Client(verify=False) as client:
+                        response = client.post(
+                            f"{APIConfig.R2R_BASE_URL}/documents",
+                            headers=APIConfig.r2r_headers(),
+                            json={
+                                "content": content,
+                                "metadata": {
+                                    "filename": file.filename,
+                                    "upload_date": datetime.utcnow().isoformat()
+                                }
                             }
-                        }
-                    )
-                    
-                    if response.status_code != 200:
-                        raise Exception(f"Document upload failed: {response.text}")
-                    
-                    doc_data = response.json()
-                    return jsonify({
-                        "message": "Document uploaded successfully",
-                        "document": doc_data
-                    })
+                        )
+                        
+                        if response.status_code != 200:
+                            raise Exception(f"Document upload failed: {response.text}")
+                        
+                        doc_data = response.json()
+                        results.append({
+                            "name": file.filename,
+                            "status": "success",
+                            "document": doc_data
+                        })
 
-            finally:
-                if temp_path and os.path.exists(temp_path):
-                    os.remove(temp_path)
+                finally:
+                    if temp_path and os.path.exists(temp_path):
+                        os.remove(temp_path)
+            else:
+                results.append({
+                    "name": file.filename if file else "Unknown",
+                    "status": "error",
+                    "error": "Invalid file type"
+                })
 
-        return jsonify({"error": "Invalid file type"}), 400
+        return jsonify({"message": "Files processed", "files": results})
 
     except Exception as e:
-        logger.error(f"Error uploading document: {str(e)}")
+        logger.error(f"Error uploading files: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 @app.route("/query", methods=["POST"])
-async def query_documents():
+def query_documents():
     """Query documents using R2R"""
     try:
         data = request.json
         if not data or 'query' not in data:
             return jsonify({"error": "No query provided"}), 400
 
-        response = await DocumentProcessor.process_query(data['query'])
+        response = DocumentProcessor.process_query(data['query'])
         return jsonify({"response": response})
 
     except Exception as e:
@@ -195,11 +205,11 @@ async def query_documents():
         return jsonify({"error": str(e)}), 500
 
 @app.route("/documents/<document_id>", methods=["DELETE"])
-async def delete_document(document_id):
+def delete_document(document_id):
     """Delete a document from R2R"""
     try:
-        async with httpx.AsyncClient(verify=False) as client:
-            response = await client.delete(
+        with httpx.Client(verify=False) as client:
+            response = client.delete(
                 f"{APIConfig.R2R_BASE_URL}/documents/{document_id}",
                 headers=APIConfig.r2r_headers()
             )
