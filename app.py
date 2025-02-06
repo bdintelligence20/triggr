@@ -11,8 +11,20 @@ from dotenv import load_dotenv
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load environment variables
+    # Load environment variables
 load_dotenv()
+
+# Validate API key format
+api_key = os.getenv("R2R_API_KEY")
+if not api_key:
+    raise ValueError("R2R_API_KEY environment variable is not set")
+if '.' in api_key:
+    secret_key = api_key.split('.')[1]
+    if not secret_key.startswith('sk_'):
+        raise ValueError("Invalid API key format: secret key portion should start with 'sk_'")
+else:
+    if not api_key.startswith('sk_'):
+        raise ValueError("Invalid API key format: should start with 'sk_'")
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -22,12 +34,18 @@ CORS(app)
 class APIConfig:
     # R2R (Documents API)
     R2R_API_KEY = os.getenv("R2R_API_KEY")
-    R2R_BASE_URL = "https://api.sciphi.ai/v3"
+    # Extract organization ID from the public key part
+    ORG_ID = R2R_API_KEY.split('.')[0].replace('pk_', '') if R2R_API_KEY and '.' in R2R_API_KEY else None
+    R2R_BASE_URL = f"https://api.sciphi.ai/organizations/{ORG_ID}" if ORG_ID else None
 
     @classmethod
     def r2r_headers(cls):
+        api_key = cls.R2R_API_KEY
+        if '.' in api_key:
+            api_key = api_key.split('.')[1]  # Get the secret key part
+        
         return {
-            "Authorization": f"Bearer {cls.R2R_API_KEY}",
+            "X-API-Key": api_key,
             "Content-Type": "application/json"
         }
 
@@ -37,7 +55,7 @@ class DocumentProcessor:
         """Get embedding for a text using R2R API"""
         with httpx.Client(verify=False) as client:
             response = client.post(
-                f"{APIConfig.R2R_BASE_URL}/documents/embeddings",
+                f"{APIConfig.R2R_BASE_URL}/embeddings",
                 headers=APIConfig.r2r_headers(),
                 json={"input": text}
             )
@@ -57,7 +75,7 @@ class DocumentProcessor:
             with httpx.Client(verify=False) as client:
                 # Use R2R's document search endpoint
                 search_response = client.post(
-                    f"{APIConfig.R2R_BASE_URL}/documents/search",
+                    f"{APIConfig.R2R_BASE_URL}/docstore/search",
                     headers=APIConfig.r2r_headers(),
                     json={
                         "query": query_text,
@@ -117,7 +135,7 @@ def get_files():
         
         with httpx.Client(verify=False) as client:
             response = client.get(
-                f"{APIConfig.R2R_BASE_URL}/documents",
+                f"{APIConfig.R2R_BASE_URL}/docstore/documents",
                 headers=APIConfig.r2r_headers()
             )
             
@@ -181,7 +199,7 @@ def upload_files():
                     # Upload to R2R
                     with httpx.Client(verify=False) as client:
                         response = client.post(
-                            f"{APIConfig.R2R_BASE_URL}/documents",
+                            f"{APIConfig.R2R_BASE_URL}/docstore/documents",
                             headers=APIConfig.r2r_headers(),
                             json={
                                 "content": content,
@@ -239,7 +257,7 @@ def delete_document(document_id):
     try:
         with httpx.Client(verify=False) as client:
             response = client.delete(
-                f"{APIConfig.R2R_BASE_URL}/documents/{document_id}",
+                f"{APIConfig.R2R_BASE_URL}/docstore/documents/{document_id}",
                 headers=APIConfig.r2r_headers()
             )
             if response.status_code == 204:
