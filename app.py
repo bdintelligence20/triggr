@@ -101,19 +101,47 @@ def root():
     """Root endpoint"""
     return jsonify({
         "status": "ok",
-        "message": "R2R API Service is running"
+        "message": "R2R API Service is running",
+        "api_key_configured": bool(APIConfig.R2R_API_KEY),
+        "api_url": APIConfig.R2R_BASE_URL
     })
 
 @app.route("/files", methods=["GET"])
 def get_files():
     """Get list of all documents from R2R"""
     try:
+        # Log headers for debugging (excluding API key)
+        debug_headers = APIConfig.r2r_headers().copy()
+        debug_headers["X-API-Key"] = "REDACTED"
+        logger.info(f"Making request to R2R API with headers: {debug_headers}")
+        
         with httpx.Client(verify=False) as client:
             response = client.get(
                 f"{APIConfig.R2R_BASE_URL}/documents",
                 headers=APIConfig.r2r_headers()
             )
+            
+            # Log response status and headers
+            logger.info(f"R2R API Response Status: {response.status_code}")
+            logger.info(f"R2R API Response Headers: {dict(response.headers)}")
+            
+            if response.status_code == 403:
+                logger.error("Authentication failed with R2R API")
+                return jsonify({
+                    "error": "Authentication failed",
+                    "message": "Please check your R2R API key"
+                }), 403
+                
+            response.raise_for_status()  # Raise error for other non-200 responses
             return jsonify(response.json())
+            
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error occurred: {str(e)}")
+        return jsonify({
+            "error": "API Error",
+            "message": str(e),
+            "status_code": e.response.status_code
+        }), e.response.status_code
     except Exception as e:
         logger.error(f"Error getting documents: {str(e)}")
         return jsonify({"error": str(e)}), 500
