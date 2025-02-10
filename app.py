@@ -6,6 +6,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from r2r import R2RClient
 import tempfile
+import uuid  # Add this import
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
