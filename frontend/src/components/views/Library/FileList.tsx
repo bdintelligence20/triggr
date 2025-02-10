@@ -1,24 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import { File, Folder, Download } from 'lucide-react';
-import { LibraryItem, useFileStore } from './store/useFileStore';
-import FileActionsMenu from './FileActions/FileActionsMenu';
-import DeleteConfirmationDialog from './FileActions/DeleteConfirmationDialog';
-import RenameDialog from './FileActions/RenameDialog';
+
+interface LibraryItem {
+  id: string;
+  name: string;
+  type: 'file' | 'folder';
+  size: string;
+  owner: string;
+  lastModified: string;
+}
 
 const FileList = () => {
-  const files = useFileStore(state => state.files);
-  const fetchFiles = useFileStore(state => state.fetchFiles);
-  const removeFile = useFileStore(state => state.removeFile);
-  const renameFile = useFileStore(state => state.renameFile);
-  
-  const [itemToDelete, setItemToDelete] = useState<LibraryItem | null>(null);
-  const [itemToRename, setItemToRename] = useState<LibraryItem | null>(null);
+  const [files, setFiles] = useState<LibraryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const loadFiles = async () => {
+    const fetchFiles = async () => {
       try {
-        await fetchFiles();
+        const response = await fetch('https://triggr.onrender.com/files');
+        const data = await response.json();
+        setFiles(data.files || []);
       } catch (error) {
         console.error('Error fetching files:', error);
       } finally {
@@ -26,38 +27,8 @@ const FileList = () => {
       }
     };
 
-    loadFiles();
-  }, [fetchFiles]);
-
-  const handleDelete = (item: LibraryItem) => {
-    setItemToDelete(item);
-  };
-
-  const handleRename = (item: LibraryItem) => {
-    setItemToRename(item);
-  };
-
-  const confirmDelete = async () => {
-    if (!itemToDelete) return;
-    try {
-      await removeFile(itemToDelete.id);
-      setItemToDelete(null);
-    } catch (error) {
-      console.error('Error deleting file:', error);
-      // You might want to show an error notification here
-    }
-  };
-
-  const confirmRename = async (newName: string) => {
-    if (!itemToRename) return;
-    try {
-      await renameFile(itemToRename.id, newName);
-      setItemToRename(null);
-    } catch (error) {
-      console.error('Error renaming file:', error);
-      // You might want to show an error notification here
-    }
-  };
+    fetchFiles();
+  }, []);
 
   if (isLoading) {
     return (
@@ -85,7 +56,7 @@ const FileList = () => {
           <div className="hidden md:block col-span-2">Size</div>
         </div>
         <div className="flex items-center gap-4">
-          <a
+          
             href="#"
             onClick={(e) => {
               e.preventDefault();
@@ -125,34 +96,9 @@ const FileList = () => {
           </div>
           <div className="hidden md:block col-span-1 text-gray-600">{item.size}</div>
           <div className="hidden md:block col-span-1 text-right">
-            <FileActionsMenu
-              item={item}
-              onRename={handleRename}
-              onDelete={handleDelete}
-            />
           </div>
         </div>
       ))}
-
-      {itemToDelete && (
-        <DeleteConfirmationDialog
-          item={itemToDelete}
-          isOpen={true}
-          onClose={() => setItemToDelete(null)}
-          onConfirm={confirmDelete}
-        />
-      )}
-
-      {itemToRename && (
-        <RenameDialog
-          item={itemToRename}
-          isOpen={true}
-          onClose={() => setItemToRename(null)}
-          onConfirm={confirmRename}
-        />
-      )}
     </div>
   );
 };
-
-export default FileList;
