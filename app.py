@@ -48,7 +48,7 @@ class RAGConfig:
         
         # Configure RAG parameters
         self.rag_settings = {
-            "model": os.getenv("LLM_MODEL", "openai/gpt-4"),
+            "model": os.getenv("LLM_MODEL", "openai/gpt-4o"),
             "temperature": float(os.getenv("LLM_TEMPERATURE", "0.0")),
         }
         
