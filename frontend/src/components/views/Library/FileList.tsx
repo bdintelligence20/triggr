@@ -56,8 +56,7 @@ const FileList = () => {
           <div className="hidden md:block col-span-2">Size</div>
         </div>
         <div className="flex items-center gap-4">
-          
-            href="#"
+          <button
             onClick={(e) => {
               e.preventDefault();
               console.log('Downloading files...');
@@ -66,7 +65,7 @@ const FileList = () => {
           >
             <Download size={16} />
             <span className="text-sm">Download</span>
-          </a>
+          </button>
         </div>
       </div>
       
@@ -95,10 +94,11 @@ const FileList = () => {
             {new Date(item.lastModified).toLocaleDateString()}
           </div>
           <div className="hidden md:block col-span-1 text-gray-600">{item.size}</div>
-          <div className="hidden md:block col-span-1 text-right">
-          </div>
+          <div className="hidden md:block col-span-1 text-right" />
         </div>
       ))}
     </div>
   );
 };
+
+export default FileList;
