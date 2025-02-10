@@ -1,10 +1,11 @@
+// src/components/TriggrHubApp.tsx
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Header from './layout/Header';
 import Sidebar from './layout/Sidebar';
 import Dashboard from './views/Dashboard';
 import Hubs from './views/Hubs';
 import Library from './views/Library';
-import Chat from './views/Chat';
+// import Chat from './views/Chat';  // Temporarily comment out
 import Insights from './views/Insights';
 import Profile from './views/Profile';
 import Settings from './views/Settings';
@@ -34,7 +35,8 @@ const TriggrHubApp = () => {
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/hubs" element={<Hubs />} />
             <Route path="/library" element={<Library />} />
-            <Route path="/chat" element={<Chat />} />
+            {/* Temporarily comment out Chat route */}
+            {/* <Route path="/chat" element={<Chat />} /> */}
             <Route path="/insights" element={<Insights />} />
             <Route path="/profile" element={<Profile />} />
             <Route path="/settings" element={<Settings />} />
