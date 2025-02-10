@@ -17,9 +17,15 @@ const FileList = () => {
   useEffect(() => {
     const fetchFiles = async () => {
       try {
+        console.log('Fetching files...');
         const response = await fetch('https://triggr.onrender.com/files');
+        console.log('Response:', response);
         const data = await response.json();
-        setFiles(data.files || []);
+        console.log('Data:', data);
+        
+        if (data && data.files) {
+          setFiles(data.files);
+        }
       } catch (error) {
         console.error('Error fetching files:', error);
       } finally {
