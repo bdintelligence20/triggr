@@ -16,7 +16,13 @@ load_dotenv()
 
 # Initialize Flask app
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={
+    r"/*": {
+        "origins": ["http://localhost:3000", "https://triggr.onrender.com"],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
+})
 
 class RAGConfig:
     """Configuration for the RAG system"""
@@ -310,24 +316,36 @@ def upload_files():
     """Handle file uploads"""
     try:
         if 'files' not in request.files:
-            return jsonify({"error": "No files provided"}), 400
+            return jsonify({
+                "status": "error",
+                "error": "No files provided"
+            }), 400
 
         files = request.files.getlist('files')
         results = []
+        file_ids = []
 
         for file in files:
             if file.filename:
                 result = document_manager.process_file(file)
                 results.append(result)
+                if result.get('status') == 'success':
+                    file_ids.append(result.get('document_id'))
 
         return jsonify({
+            "status": "success",
             "message": "Files processed",
-            "files": results
+            "files": results,
+            "file_ids": file_ids  # Add file_ids to match frontend expectations
         })
 
     except Exception as e:
         logger.error(f"Error uploading files: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        logger.exception("Full traceback:")
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
 
 @app.route("/query", methods=["POST"])
 def query():

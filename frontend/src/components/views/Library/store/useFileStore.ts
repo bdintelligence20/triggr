@@ -19,16 +19,17 @@ interface FileState {
 }
 
 export const useFileStore = create<FileState>((set) => ({
-  files: [],
-  
+  files: [], // Ensure files is initialized as empty array
   fetchFiles: async () => {
     try {
       const response = await fetch('https://triggr.onrender.com/files');
-      if (!response.ok) throw new Error('Failed to fetch files');
-      const files = await response.json();
-      set({ files });
+      const data = await response.json();
+      if (data.files) {  // Change to match backend response
+        set({ files: data.files });
+      }
     } catch (error) {
       console.error('Error fetching files:', error);
+      set({ files: [] });  // Reset to empty array on error
     }
   },
 
