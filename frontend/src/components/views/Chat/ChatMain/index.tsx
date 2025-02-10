@@ -1,9 +1,10 @@
+// src/components/views/ChatMain/index.tsx
 import React, { useState } from 'react';
-import ChatMessages from './ChatMessages';
-import ChatInput from './ChatInput';
-import ChatButtons from './ChatButtons';
-import ChatPrompts from './ChatPrompts';
-import { ChatMessage, ChatType } from '../types';
+import Messages from './Messages';
+import Input from './Input';
+import Buttons from './Buttons';
+import Prompts from './Prompts';
+import { ChatMessage, ChatType } from '../../../types';
 
 interface ChatMainProps {
   initialType?: ChatType;
@@ -31,8 +32,9 @@ const ChatMain: React.FC<ChatMainProps> = ({ initialType = 'request', initialPla
     handleSendMessage(prompt);
   };
 
-  const handleSendMessage = (content: string) => {
-    const newMessage: ChatMessage = {
+  const handleSendMessage = async (content: string) => {
+    // Add user message immediately
+    const userMessage: ChatMessage = {
       id: Date.now().toString(),
       type: 'employee',
       content,
@@ -40,7 +42,48 @@ const ChatMain: React.FC<ChatMainProps> = ({ initialType = 'request', initialPla
       sender: { name: 'You' },
       isRead: true
     };
-    setMessages(prev => [...prev, newMessage]);
+    setMessages(prev => [...prev, userMessage]);
+
+    try {
+      // Send message to query endpoint for RAG processing
+      const response = await fetch('https://triggr.onrender.com/query', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: content
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to get response');
+      }
+
+      const data = await response.json();
+      
+      // Create AI message from the response
+      const aiMessage: ChatMessage = {
+        id: Date.now().toString(),
+        type: 'ai',
+        content: data.response,
+        timestamp: new Date().toISOString(),
+        sender: { name: 'AI Assistant' },
+        isRead: true
+      };
+
+      setMessages(prev => [...prev, aiMessage]);
+    } catch (error) {
+      console.error('Error getting AI response:', error);
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        type: 'ai',
+        content: 'Sorry, I encountered an error processing your message. Please try again.',
+        timestamp: new Date().toISOString(),
+        sender: { name: 'AI Assistant' },
+        isRead: true
+      }]);
+    }
   };
 
   const getPlaceholder = () => {
@@ -52,11 +95,11 @@ const ChatMain: React.FC<ChatMainProps> = ({ initialType = 'request', initialPla
   return (
     <div className="flex-1 flex flex-col bg-white border-l">
       <div className="p-4 border-b">
-        <ChatButtons activeType={activeType} onTypeSelect={handleTypeSelect} />
-        <ChatPrompts type={activeType} onPromptSelect={handlePromptSelect} />
+        <Buttons activeType={activeType} onTypeSelect={handleTypeSelect} />
+        <Prompts type={activeType} onPromptSelect={handlePromptSelect} />
       </div>
-      <ChatMessages messages={messages} />
-      <ChatInput 
+      <Messages messages={messages} />
+      <Input 
         onSendMessage={handleSendMessage}
         placeholder={getPlaceholder()}
         chatType={activeType || 'request'}
