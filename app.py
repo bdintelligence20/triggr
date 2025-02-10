@@ -34,15 +34,14 @@ CORS(app)
 class APIConfig:
     # R2R (Documents API)
     R2R_API_KEY = os.getenv("R2R_API_KEY")
-    # Extract organization ID and create base URL
-    ORG_ID = R2R_API_KEY.split('.')[0].replace('pk_', '') if R2R_API_KEY and '.' in R2R_API_KEY else None
-    R2R_BASE_URL = f"https://r2r.sciphi.ai/api/v1"  # New base URL
+    R2R_BASE_URL = "https://api.sciphi.ai"
 
     @classmethod
     def r2r_headers(cls):
-        # Use the full API key for authentication
+        # Use the full API key in both headers to cover all bases
         return {
             "Authorization": f"Bearer {cls.R2R_API_KEY}",
+            "X-API-Key": cls.R2R_API_KEY,
             "Accept": "application/json",
             "Content-Type": "application/json"
         }
@@ -53,7 +52,7 @@ class DocumentProcessor:
         """Get embedding for a text using R2R API"""
         with httpx.Client(verify=False) as client:
             response = client.post(
-                f"{APIConfig.R2R_BASE_URL}/embeddings",
+                f"{APIConfig.R2R_BASE_URL}/v1/embeddings",
                 headers=APIConfig.r2r_headers(),
                 json={"input": text}
             )
@@ -70,10 +69,10 @@ class DocumentProcessor:
             # Get embedding for context retrieval
             embedding = DocumentProcessor.get_embedding(query_text)
             
-            with httpx.Client(verify=False) as client:
+            with httpx.Client(verify=False, timeout=30.0) as client:
                 # Use R2R's document search endpoint
                 search_response = client.post(
-                    f"{APIConfig.R2R_BASE_URL}/search",
+                    f"{APIConfig.R2R_BASE_URL}/v1/search",
                     headers=APIConfig.r2r_headers(),
                     json={
                         "query": query_text,
@@ -175,7 +174,7 @@ def get_files():
         
         with httpx.Client(verify=False) as client:
             response = client.get(
-                f"{APIConfig.R2R_BASE_URL}/documents",
+                f"{APIConfig.R2R_BASE_URL}/v1/documents",
                 headers=APIConfig.r2r_headers()
             )
             
@@ -247,7 +246,7 @@ def upload_files():
                         logger.info(f"Payload size: {len(content)} bytes")
                         
                         response = client.post(
-                            f"{APIConfig.R2R_BASE_URL}/documents",
+                            f"{APIConfig.R2R_BASE_URL}/v1/documents",
                             headers=APIConfig.r2r_headers(),
                             json={
                                 "content": content,
@@ -305,7 +304,7 @@ def delete_document(document_id):
     try:
         with httpx.Client(verify=False) as client:
             response = client.delete(
-                f"{APIConfig.R2R_BASE_URL}/documents/{document_id}",
+                f"{APIConfig.R2R_BASE_URL}/v1/documents/{document_id}",
                 headers=APIConfig.r2r_headers()
             )
             if response.status_code == 204:
