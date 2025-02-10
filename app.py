@@ -26,6 +26,9 @@ else:
     if not api_key.startswith('sk_'):
         raise ValueError("Invalid API key format: should start with 'sk_'")
 
+# Validate API key format on startup
+APIConfig.validate_api_key()
+
 # Initialize Flask app
 app = Flask(__name__)
 CORS(app)
@@ -37,11 +40,26 @@ class APIConfig:
     R2R_BASE_URL = "https://api.sciphi.ai"
 
     @classmethod
+    def validate_api_key(cls):
+        if not cls.R2R_API_KEY:
+            raise ValueError("R2R_API_KEY environment variable is not set")
+        if '.' not in cls.R2R_API_KEY:
+            raise ValueError("API key should be in format 'pk_xxx.sk_xxx'")
+        secret_key = cls.R2R_API_KEY.split('.')[1]
+        if not secret_key.startswith('sk_'):
+            raise ValueError("Secret key portion should start with 'sk_'")
+        return True
+
+    @classmethod
     def r2r_headers(cls):
-        # Use the full API key in both headers to cover all bases
+        cls.validate_api_key()  # Validate API key format
+        # Extract only the secret key portion after the dot
+        secret_key = cls.R2R_API_KEY.split('.')[1]
+
+        # Use only the secret key for authentication
         return {
-            "Authorization": f"Bearer {cls.R2R_API_KEY}",
-            "X-API-Key": cls.R2R_API_KEY,
+            "Authorization": f"Bearer {secret_key}",
+            "X-API-Key": secret_key,
             "Accept": "application/json",
             "Content-Type": "application/json"
         }
