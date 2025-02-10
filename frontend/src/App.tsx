@@ -1,7 +1,8 @@
 // src/App.tsx
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import TriggrHubApp from './components/TriggrHubApp';
-import TestChat from './components/TestChat';
+import TestChat from './components/TestChat/index';
+;
 
 function App() {
   return (
