@@ -226,6 +226,47 @@ def health_check():
             "timestamp": datetime.utcnow().isoformat()
         }), 500
 
+@app.route("/test-connection", methods=["GET"])
+def test_connection():
+    """Test database and R2R connections"""
+    try:
+        # Get Postgres configuration
+        postgres_config = {
+            "host": os.getenv("R2R_POSTGRES_HOST"),
+            "port": int(os.getenv("R2R_POSTGRES_PORT", "6543")),
+            "user": os.getenv("R2R_POSTGRES_USER", "postgres"),
+            "dbname": os.getenv("R2R_POSTGRES_DBNAME", "postgres"),
+            "project_name": os.getenv("R2R_PROJECT_NAME", "r2r_project")
+        }
+        
+        # Log connection attempt
+        logger.info(f"Testing connection to Postgres: {postgres_config['host']}:{postgres_config['port']}")
+        
+        # Test R2R connection
+        response = rag_config.client.documents.list()
+        logger.info(f"R2R connection test response: {response}")
+        
+        return jsonify({
+            "status": "success",
+            "postgres_config": {
+                "host": postgres_config["host"],
+                "port": postgres_config["port"],
+                "user": postgres_config["user"],
+                "dbname": postgres_config["dbname"],
+                "project_name": postgres_config["project_name"]
+            },
+            "r2r_status": "connected",
+            "timestamp": datetime.utcnow().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Connection test failed: {str(e)}")
+        logger.exception("Full traceback:")
+        return jsonify({
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat()
+        }), 500
+
 @app.route("/", methods=["GET"])
 def root():
     """Root endpoint"""
