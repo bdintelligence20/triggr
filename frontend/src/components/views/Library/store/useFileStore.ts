@@ -54,6 +54,8 @@ export const useFileStore = create<FileState>((set) => ({
     }
   },
 
+  
+
   removeFile: async (id) => {
     try {
       await fetch(`https://triggr.onrender.com/files/${id}`, {
