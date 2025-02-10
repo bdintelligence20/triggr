@@ -21,7 +21,7 @@ CORS(app)
 class RAGConfig:
     """Configuration for the RAG system"""
     def __init__(self):
-        # Initialize R2R client
+        # Initialize R2R client with custom settings
         self.client = R2RClient()
         
         # Configure RAG parameters
@@ -32,7 +32,7 @@ class RAGConfig:
         
         # Configure search settings
         self.search_settings = {
-            "index_measure": "l2_distance",
+            "index_measure": "cosine",  # or "l2_distance", "inner_product"
             "use_hybrid_search": True,
             "hybrid_settings": {
                 "full_text_weight": 1.0,
@@ -40,6 +40,19 @@ class RAGConfig:
                 "full_text_limit": 200,
                 "rrf_k": 50,
             }
+        }
+        
+        # Configure chunking settings
+        self.chunk_settings = {
+            "chunk_size": 1000,  # Size of each chunk in characters
+            "chunk_overlap": 200,  # Overlap between chunks
+            "length_function": len,  # Function to measure chunk size
+        }
+        
+        # Configure embedding settings
+        self.embedding_settings = {
+            "model": "openai",  # R2R will use the appropriate embedding model
+            "dimensions": 1536,  # Embedding dimensions
         }
 
 class DocumentManager:
@@ -56,11 +69,63 @@ class DocumentManager:
                 file.save(temp.name)
                 temp_path = temp.name
 
-            # Ingest document using R2R
+            # Prepare ingestion settings
+            ingestion_settings = {
+                "chunk_settings": self.config.chunk_settings,
+                "embedding_settings": self.config.embedding_settings
+            }
+
+            # Ingest document using R2R with custom settings
             response = self.client.documents.create(
                 file_path=temp_path,
-                metadata={"filename": file.filename, "upload_date": datetime.utcnow().isoformat()}
+                metadata={
+                    "filename": file.filename,
+                    "upload_date": datetime.utcnow().isoformat(),
+                    "settings": ingestion_settings
+                },
+                ingestion_settings=ingestion_settings
             )
+
+            # Log the full response for debugging
+            logger.info(f"Document creation response: {response}")
+
+            # Handle IngestionResponse
+            if hasattr(response, 'document_id'):
+                doc_id = str(response.document_id)
+            elif hasattr(response, 'results') and hasattr(response.results, 'document_id'):
+                doc_id = str(response.results.document_id)
+            else:
+                doc_id = "pending"
+                logger.warning(f"Unexpected response format: {response}")
+
+            # Handle task_id if available
+            task_id = None
+            if hasattr(response, 'task_id'):
+                task_id = str(response.task_id)
+            elif hasattr(response, 'results') and hasattr(response.results, 'task_id'):
+                task_id = str(response.results.task_id)
+
+            # Clean up temporary file
+            os.unlink(temp_path)
+
+            return {
+                "status": "success",
+                "document_id": doc_id,
+                "task_id": task_id,
+                "filename": file.filename,
+                "message": "Document upload initiated and being processed"
+            }
+
+        except Exception as e:
+            logger.error(f"Error processing file {file.filename}: {str(e)}")
+            logger.exception("Full traceback:")  # This will log the full traceback
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+            return {
+                "status": "error",
+                "filename": file.filename,
+                "error": str(e)
+            }
             
             # Extract document ID from the response
             # The response type might vary depending on the R2R version
@@ -175,19 +240,20 @@ def get_files():
     try:
         # List all documents
         response = rag_config.client.documents.list()
+        logger.info(f"Documents response: {response}")
         
-        # The response contains documents in a data field
         documents = []
-        for doc in response:
-            if isinstance(doc, tuple) and len(doc) >= 2:
-                doc_id, metadata = doc
-                documents.append({
-                    "id": doc_id,
-                    "filename": metadata.get("filename", "Unknown") if metadata else "Unknown",
-                    "upload_date": metadata.get("upload_date", "Unknown") if metadata else "Unknown"
-                })
-            else:
-                logger.warning(f"Unexpected document format: {doc}")
+        # Check if response is a list
+        if isinstance(response, list):
+            for doc in response:
+                # Handle each document based on its structure
+                doc_data = {
+                    "id": str(doc["id"]) if isinstance(doc, dict) and "id" in doc else "unknown",
+                    "filename": doc["metadata"]["filename"] if isinstance(doc, dict) and "metadata" in doc and "filename" in doc["metadata"] else "Unknown",
+                    "upload_date": doc["metadata"]["upload_date"] if isinstance(doc, dict) and "metadata" in doc and "upload_date" in doc["metadata"] else "Unknown",
+                    "status": doc["status"] if isinstance(doc, dict) and "status" in doc else "unknown"
+                }
+                documents.append(doc_data)
         
         return jsonify({
             "status": "success",
@@ -195,6 +261,7 @@ def get_files():
         })
     except Exception as e:
         logger.error(f"Error getting documents: {str(e)}")
+        logger.exception("Full traceback:")  # This will log the full traceback
         return jsonify({"error": str(e)}), 500
 
 @app.route("/upload-files", methods=["POST"])
@@ -235,6 +302,54 @@ def query():
 
     except Exception as e:
         logger.error(f"Error processing query: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/documents/<document_id>/chunks", methods=["GET"])
+def get_document_chunks(document_id):
+    """Get chunks for a specific document"""
+    try:
+        # Get document chunks with their embeddings
+        chunks = rag_config.client.documents.get_chunks(document_id)
+        
+        return jsonify({
+            "status": "success",
+            "document_id": document_id,
+            "chunks": [{
+                "id": chunk.id if hasattr(chunk, 'id') else None,
+                "text": chunk.text if hasattr(chunk, 'text') else str(chunk),
+                "metadata": chunk.metadata if hasattr(chunk, 'metadata') else None
+            } for chunk in chunks]
+        })
+    except Exception as e:
+        logger.error(f"Error getting document chunks: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/documents/<document_id>/status", methods=["GET"])
+def get_document_status(document_id):
+    """Get the status of a document"""
+    try:
+        # Get document status
+        response = rag_config.client.documents.get(document_id)
+        logger.info(f"Document status response: {response}")
+        
+        # Extract status information
+        status_data = {
+            "document_id": document_id,
+            "status": "unknown"
+        }
+        
+        if isinstance(response, dict):
+            status_data.update({
+                "status": response.get("status", "unknown"),
+                "filename": response.get("metadata", {}).get("filename", "Unknown"),
+                "upload_date": response.get("metadata", {}).get("upload_date", "Unknown"),
+                "is_processed": response.get("is_processed", False)
+            })
+        
+        return jsonify(status_data)
+    except Exception as e:
+        logger.error(f"Error getting document status: {str(e)}")
+        logger.exception("Full traceback:")
         return jsonify({"error": str(e)}), 500
 
 @app.route("/documents/<document_id>", methods=["DELETE"])
