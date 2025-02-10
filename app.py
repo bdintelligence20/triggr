@@ -75,22 +75,51 @@ class DocumentManager:
                 file.save(temp.name)
                 temp_path = temp.name
 
-            # Prepare ingestion settings
-            ingestion_settings = {
-                "chunk_settings": self.config.chunk_settings,
-                "embedding_settings": self.config.embedding_settings
-            }
-
-            # Ingest document using R2R with custom settings
+            # Ingest document using R2R with metadata
             response = self.client.documents.create(
                 file_path=temp_path,
                 metadata={
                     "filename": file.filename,
                     "upload_date": datetime.utcnow().isoformat(),
-                    "settings": ingestion_settings
-                },
-                ingestion_settings=ingestion_settings
+                }
             )
+
+            # Log the full response for debugging
+            logger.info(f"Document creation response: {response}")
+
+            # Extract document ID
+            doc_id = str(response.document_id) if hasattr(response, 'document_id') else None
+            if not doc_id and hasattr(response, 'results'):
+                doc_id = str(response.results.document_id)
+
+            # Extract task ID if available
+            task_id = None
+            if hasattr(response, 'task_id'):
+                task_id = str(response.task_id)
+            elif hasattr(response, 'results') and hasattr(response.results, 'task_id'):
+                task_id = str(response.results.task_id)
+
+            # Clean up temporary file
+            os.unlink(temp_path)
+
+            return {
+                "status": "success",
+                "document_id": doc_id,
+                "task_id": task_id,
+                "filename": file.filename,
+                "message": "Document upload initiated and being processed"
+            }
+
+        except Exception as e:
+            logger.error(f"Error processing file {file.filename}: {str(e)}")
+            logger.exception("Full traceback:")
+            if 'temp_path' in locals() and os.path.exists(temp_path):
+                os.unlink(temp_path)
+            return {
+                "status": "error",
+                "filename": file.filename,
+                "error": str(e)
+            }
 
             # Log the full response for debugging
             logger.info(f"Document creation response: {response}")
