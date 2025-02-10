@@ -34,18 +34,16 @@ CORS(app)
 class APIConfig:
     # R2R (Documents API)
     R2R_API_KEY = os.getenv("R2R_API_KEY")
-    # Extract organization ID from the public key part
+    # Extract organization ID and create base URL
     ORG_ID = R2R_API_KEY.split('.')[0].replace('pk_', '') if R2R_API_KEY and '.' in R2R_API_KEY else None
-    R2R_BASE_URL = f"https://api.sciphi.ai/organizations/{ORG_ID}" if ORG_ID else None
+    R2R_BASE_URL = f"https://r2r.sciphi.ai/api/v1"  # New base URL
 
     @classmethod
     def r2r_headers(cls):
-        api_key = cls.R2R_API_KEY
-        if '.' in api_key:
-            api_key = api_key.split('.')[1]  # Get the secret key part
-        
+        # Use the full API key for authentication
         return {
-            "X-API-Key": api_key,
+            "Authorization": f"Bearer {cls.R2R_API_KEY}",
+            "Accept": "application/json",
             "Content-Type": "application/json"
         }
 
@@ -75,7 +73,7 @@ class DocumentProcessor:
             with httpx.Client(verify=False) as client:
                 # Use R2R's document search endpoint
                 search_response = client.post(
-                    f"{APIConfig.R2R_BASE_URL}/docstore/search",
+                    f"{APIConfig.R2R_BASE_URL}/search",
                     headers=APIConfig.r2r_headers(),
                     json={
                         "query": query_text,
@@ -124,6 +122,48 @@ def root():
         "api_url": APIConfig.R2R_BASE_URL
     })
 
+@app.route("/test-connection", methods=["GET"])
+def test_connection():
+    """Test R2R API connection"""
+    try:
+        logger.info(f"Testing connection to R2R API at {APIConfig.R2R_BASE_URL}")
+        logger.info(f"Using org ID: {APIConfig.ORG_ID}")
+        
+        headers = APIConfig.r2r_headers()
+        debug_headers = headers.copy()
+        if 'X-API-Key' in debug_headers:
+            debug_headers['X-API-Key'] = 'REDACTED'
+        if 'Authorization' in debug_headers:
+            debug_headers['Authorization'] = 'REDACTED'
+        logger.info(f"Using headers: {debug_headers}")
+        
+        with httpx.Client(verify=False) as client:
+            response = client.get(
+                f"{APIConfig.R2R_BASE_URL}/health",
+                headers=headers
+            )
+            
+            logger.info(f"Response status: {response.status_code}")
+            logger.info(f"Response headers: {dict(response.headers)}")
+            logger.info(f"Response content: {response.text}")
+            
+            return jsonify({
+                "status": "success" if response.status_code == 200 else "error",
+                "api_url": APIConfig.R2R_BASE_URL,
+                "org_id": APIConfig.ORG_ID,
+                "response_code": response.status_code,
+                "response_text": response.text
+            })
+            
+    except Exception as e:
+        logger.error(f"Connection test failed: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "error": str(e),
+            "api_url": APIConfig.R2R_BASE_URL,
+            "org_id": APIConfig.ORG_ID
+        }), 500
+
 @app.route("/files", methods=["GET"])
 def get_files():
     """Get list of all documents from R2R"""
@@ -135,7 +175,7 @@ def get_files():
         
         with httpx.Client(verify=False) as client:
             response = client.get(
-                f"{APIConfig.R2R_BASE_URL}/docstore/documents",
+                f"{APIConfig.R2R_BASE_URL}/documents",
                 headers=APIConfig.r2r_headers()
             )
             
@@ -198,8 +238,16 @@ def upload_files():
 
                     # Upload to R2R
                     with httpx.Client(verify=False) as client:
+                        # Log request details (excluding sensitive data)
+                        debug_headers = APIConfig.r2r_headers().copy()
+                        if 'Authorization' in debug_headers:
+                            debug_headers['Authorization'] = 'REDACTED'
+                        logger.info(f"Making upload request to: {APIConfig.R2R_BASE_URL}/documents")
+                        logger.info(f"Headers: {debug_headers}")
+                        logger.info(f"Payload size: {len(content)} bytes")
+                        
                         response = client.post(
-                            f"{APIConfig.R2R_BASE_URL}/docstore/documents",
+                            f"{APIConfig.R2R_BASE_URL}/documents",
                             headers=APIConfig.r2r_headers(),
                             json={
                                 "content": content,
@@ -257,7 +305,7 @@ def delete_document(document_id):
     try:
         with httpx.Client(verify=False) as client:
             response = client.delete(
-                f"{APIConfig.R2R_BASE_URL}/docstore/documents/{document_id}",
+                f"{APIConfig.R2R_BASE_URL}/documents/{document_id}",
                 headers=APIConfig.r2r_headers()
             )
             if response.status_code == 204:
