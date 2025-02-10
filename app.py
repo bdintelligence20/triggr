@@ -213,16 +213,16 @@ class RAGService:
         self.config = rag_config
         self.client = rag_config.client
 
-    def query(self, query_text: str):
-    """Process a query using RAG"""
-    try:
-        # Perform RAG query
-        rag_response = self.client.retrieval.rag(
-            query=query_text,
-            rag_generation_config=self.config.rag_settings,
-            search_settings=self.config.search_settings
-        )
-
+    def query(self, query_text: str,):
+        """Process a query using RAG"""
+        try:
+            # Perform RAG query
+            rag_response = self.client.retrieval.rag(
+                query=query_text,
+                rag_generation_config=self.config.rag_settings,
+                search_settings=self.config.search_settings,
+                
+            )
 
             # Extract search results and completion
             results = rag_response.results
@@ -400,7 +400,6 @@ def query():
         if not data or 'query' not in data:
             return jsonify({"error": "No query provided"}), 400
 
-        stream = data.get('stream', False)  # ❌ Remove this
         response = rag_service.query(data['query'])  # ✅ Ensure only query is passed
         return jsonify(response)
 
