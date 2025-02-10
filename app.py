@@ -213,16 +213,16 @@ class RAGService:
         self.config = rag_config
         self.client = rag_config.client
 
-    def query(self, query_text: str, stream: bool = False):
-        """Process a query using RAG"""
-        try:
-            # Perform RAG query
-            rag_response = self.client.retrieval.rag(
-                query=query_text,
-                rag_generation_config=self.config.rag_settings,
-                search_settings=self.config.search_settings,
-                stream=stream
-            )
+    def query(self, query_text: str):
+    """Process a query using RAG"""
+    try:
+        # Perform RAG query
+        rag_response = self.client.retrieval.rag(
+            query=query_text,
+            rag_generation_config=self.config.rag_settings,
+            search_settings=self.config.search_settings
+        )
+
 
             # Extract search results and completion
             results = rag_response.results
@@ -400,13 +400,14 @@ def query():
         if not data or 'query' not in data:
             return jsonify({"error": "No query provided"}), 400
 
-        stream = data.get('stream', False)
-        response = rag_service.query(data['query'], stream)
+        stream = data.get('stream', False)  # ❌ Remove this
+        response = rag_service.query(data['query'])  # ✅ Ensure only query is passed
         return jsonify(response)
 
     except Exception as e:
         logger.error(f"Error processing query: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/documents/<document_id>/chunks", methods=["GET"])
 def get_document_chunks(document_id):
