@@ -1,11 +1,10 @@
 // src/components/views/ChatMain/index.tsx
 import React, { useState } from 'react';
-import Messages from './Messages';
-import Input from './Input';
-import Buttons from './Buttons';
-import Prompts from './Prompts';
-import { ChatMessage, ChatType } from '../../../types';
+import Messages from './ChatMessages';import Input from './Input';
+import Buttons from './ChatButtons';
+import Prompts from './ChatPrompts';
 
+import { ChatMessage } from '../../../types/chat';
 interface ChatMainProps {
   initialType?: ChatType;
   initialPlaceholder?: string;

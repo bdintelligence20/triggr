@@ -1,9 +1,9 @@
 // src/components/views/Chat/index.tsx
 import React, { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
-import ChatSidebar from '../ChatSidebar';
-import ChatMain from '../ChatMain';
-import ChatTag from '../ChatTag';
+import ChatSidebar from './ChatSidebar';
+import ChatMain from './ChatMain';
+import ChatTag from './ChatTag';
 
 const Chat = () => {
   const [activeThreadId, setActiveThreadId] = useState<string | undefined>();
