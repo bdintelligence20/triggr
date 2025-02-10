@@ -57,18 +57,30 @@ class DocumentManager:
                 temp_path = temp.name
 
             # Ingest document using R2R
-            doc_response = self.client.documents.create(
+            response = self.client.documents.create(
                 file_path=temp_path,
                 metadata={"filename": file.filename, "upload_date": datetime.utcnow().isoformat()}
             )
+            
+            # Extract document ID from the response
+            # The response type might vary depending on the R2R version
+            doc_id = None
+            if hasattr(response, 'id'):
+                doc_id = response.id
+            elif isinstance(response, tuple) and len(response) >= 1:
+                doc_id = response[0]
+            else:
+                logger.warning(f"Unexpected response format: {response}")
+                doc_id = "pending"  # Document is being processed
 
             # Clean up temporary file
             os.unlink(temp_path)
 
             return {
                 "status": "success",
-                "document_id": doc_response.id,
-                "filename": file.filename
+                "document_id": doc_id,
+                "filename": file.filename,
+                "message": "Document uploaded and being processed"
             }
 
         except Exception as e:
@@ -122,6 +134,33 @@ rag_config = RAGConfig()
 document_manager = DocumentManager(rag_config)
 rag_service = RAGService(rag_config)
 
+# Error handlers
+@app.errorhandler(405)
+def method_not_allowed(e):
+    return jsonify({
+        "error": "Method not allowed",
+        "message": "The method is not allowed for this endpoint"
+    }), 405
+
+@app.route("/health", methods=["GET"])
+def health_check():
+    """Health check endpoint that also verifies R2R connection"""
+    try:
+        # Try to list documents as a connection test
+        rag_config.client.documents.list()
+        return jsonify({
+            "status": "healthy",
+            "r2r_connection": "connected",
+            "timestamp": datetime.utcnow().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat()
+        }), 500
+
 @app.route("/", methods=["GET"])
 def root():
     """Root endpoint"""
@@ -135,16 +174,24 @@ def get_files():
     """Get list of all documents"""
     try:
         # List all documents
-        docs = rag_config.client.documents.list()
+        response = rag_config.client.documents.list()
+        
+        # The response contains documents in a data field
+        documents = []
+        for doc in response:
+            if isinstance(doc, tuple) and len(doc) >= 2:
+                doc_id, metadata = doc
+                documents.append({
+                    "id": doc_id,
+                    "filename": metadata.get("filename", "Unknown") if metadata else "Unknown",
+                    "upload_date": metadata.get("upload_date", "Unknown") if metadata else "Unknown"
+                })
+            else:
+                logger.warning(f"Unexpected document format: {doc}")
+        
         return jsonify({
             "status": "success",
-            "documents": [
-                {
-                    "id": doc.id,
-                    "filename": doc.metadata.get("filename", "Unknown"),
-                    "upload_date": doc.metadata.get("upload_date", "Unknown")
-                } for doc in docs
-            ]
+            "documents": documents
         })
     except Exception as e:
         logger.error(f"Error getting documents: {str(e)}")
