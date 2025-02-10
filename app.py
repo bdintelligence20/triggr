@@ -16,13 +16,28 @@ load_dotenv()
 
 # Initialize Flask app
 app = Flask(__name__)
+
+# Configure CORS with specific origins
 CORS(app, resources={
     r"/*": {
-        "origins": ["http://localhost:3000", "https://triggr.onrender.com"],
+        "origins": [
+            "https://triggr-1.onrender.com",  # Production frontend
+            "http://localhost:3000",          # Local development
+            "http://localhost:5173"           # Vite default port
+        ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"]
     }
 })
+
+# Ensure CORS headers are returned even for errors
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', 'https://triggr-1.onrender.com')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    return response
 
 class RAGConfig:
     """Configuration for the RAG system"""
