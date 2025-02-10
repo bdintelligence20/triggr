@@ -44,15 +44,14 @@ const ChatMain: React.FC<ChatMainProps> = ({ initialType = 'request', initialPla
     setMessages(prev => [...prev, userMessage]);
 
     try {
-      // Send message to backend for RAG processing
-      const response = await fetch('https://triggr.onrender.com/chat', {
+      // Send message to query endpoint for RAG processing
+      const response = await fetch('https://triggr.onrender.com/query', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          message: content,
-          type: activeType || 'request'
+          query: content
         }),
       });
 
@@ -60,14 +59,19 @@ const ChatMain: React.FC<ChatMainProps> = ({ initialType = 'request', initialPla
         throw new Error('Failed to get response');
       }
 
-      // Add AI response to messages
-      const aiMessage = await response.json();
-      setMessages(prev => [...prev, {
-        ...aiMessage,
+      const data = await response.json();
+      
+      // Create AI message from the response
+      const aiMessage: ChatMessage = {
+        id: Date.now().toString(),
         type: 'ai',
+        content: data.response,
+        timestamp: new Date().toISOString(),
         sender: { name: 'AI Assistant' },
         isRead: true
-      }]);
+      };
+
+      setMessages(prev => [...prev, aiMessage]);
     } catch (error) {
       console.error('Error getting AI response:', error);
       // Add error message to chat
