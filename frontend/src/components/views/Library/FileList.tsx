@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { File, Folder, Download } from 'lucide-react';
+import { File, Folder, Download, Trash2 } from 'lucide-react';
 
 interface LibraryItem {
   id: string;
@@ -8,33 +8,66 @@ interface LibraryItem {
   size: string;
   owner: string;
   lastModified: string;
+  url?: string;
 }
 
 const FileList = () => {
   const [files, setFiles] = useState<LibraryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [deleteInProgress, setDeleteInProgress] = useState<string | null>(null);
+
+  const fetchFiles = async () => {
+    try {
+      console.log('Fetching files...');
+      const response = await fetch('https://triggr.onrender.com/files');
+      console.log('Response:', response);
+      const data = await response.json();
+      console.log('Data:', data);
+      
+      if (data && data.files) {
+        setFiles(data.files);
+      }
+    } catch (error) {
+      console.error('Error fetching files:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchFiles = async () => {
-      try {
-        console.log('Fetching files...');
-        const response = await fetch('https://triggr.onrender.com/files');
-        console.log('Response:', response);
-        const data = await response.json();
-        console.log('Data:', data);
-        
-        if (data && data.files) {
-          setFiles(data.files);
-        }
-      } catch (error) {
-        console.error('Error fetching files:', error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
     fetchFiles();
   }, []);
+
+  const handleDownload = (file: LibraryItem) => {
+    if (file.url) {
+      window.open(file.url, '_blank');
+    }
+  };
+
+  const handleDelete = async (filename: string) => {
+    if (!confirm('Are you sure you want to delete this file?')) {
+      return;
+    }
+
+    setDeleteInProgress(filename);
+    try {
+      const response = await fetch(`https://triggr.onrender.com/files/${encodeURIComponent(filename)}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to delete file');
+      }
+
+      // Refresh the file list
+      await fetchFiles();
+    } catch (error) {
+      console.error('Error deleting file:', error);
+      alert('Failed to delete file. Please try again.');
+    } finally {
+      setDeleteInProgress(null);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -54,24 +87,13 @@ const FileList = () => {
 
   return (
     <div className="bg-white rounded-lg shadow">
-      <div className="p-3 border-b border-gray-200 flex justify-between items-center">
-        <div className="grid grid-cols-12 gap-4 text-sm font-medium text-gray-500 flex-1">
+      <div className="p-3 border-b border-gray-200">
+        <div className="grid grid-cols-12 gap-4 text-sm font-medium text-gray-500">
           <div className="col-span-6 lg:col-span-6">Name</div>
           <div className="hidden md:block col-span-2">Owner</div>
           <div className="hidden md:block col-span-2">Last modified</div>
-          <div className="hidden md:block col-span-2">Size</div>
-        </div>
-        <div className="flex items-center gap-4">
-          <button
-            onClick={(e) => {
-              e.preventDefault();
-              console.log('Downloading files...');
-            }}
-            className="flex items-center gap-1 text-emerald-400 hover:text-emerald-500 transition-colors px-4"
-          >
-            <Download size={16} />
-            <span className="text-sm">Download</span>
-          </button>
+          <div className="hidden md:block col-span-1">Size</div>
+          <div className="hidden md:block col-span-1">Actions</div>
         </div>
       </div>
       
@@ -90,9 +112,6 @@ const FileList = () => {
             </div>
             <div className="min-w-0">
               <p className="font-medium truncate">{item.name}</p>
-              {item.items && (
-                <p className="text-xs text-gray-500">{item.items} items</p>
-              )}
             </div>
           </div>
           <div className="hidden md:block col-span-2 text-gray-600">{item.owner}</div>
@@ -100,7 +119,29 @@ const FileList = () => {
             {new Date(item.lastModified).toLocaleDateString()}
           </div>
           <div className="hidden md:block col-span-1 text-gray-600">{item.size}</div>
-          <div className="hidden md:block col-span-1 text-right" />
+          <div className="hidden md:flex col-span-1 gap-2 justify-end">
+            {item.url && (
+              <button
+                onClick={() => handleDownload(item)}
+                className="text-emerald-400 hover:text-emerald-500 p-1"
+                title="Download"
+              >
+                <Download size={16} />
+              </button>
+            )}
+            <button
+              onClick={() => handleDelete(item.name)}
+              className="text-red-400 hover:text-red-500 p-1"
+              disabled={deleteInProgress === item.name}
+              title="Delete"
+            >
+              {deleteInProgress === item.name ? (
+                <div className="w-4 h-4 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Trash2 size={16} />
+              )}
+            </button>
+          </div>
         </div>
       ))}
     </div>
