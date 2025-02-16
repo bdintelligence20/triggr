@@ -72,16 +72,17 @@ class StorageManager:
                 content_type=file.content_type
             )
             
-            # Make the blob publicly readable
-            blob.make_public()
+            # Generate public URL using bucket name and blob name
+            public_url = f"https://storage.googleapis.com/{self.bucket_name}/{blob_name}"
 
             return {
                 "status": "success",
                 "filename": file.filename,
-                "url": blob.public_url,
+                "url": public_url,
                 "size": blob.size,
                 "contentType": blob.content_type,
-                "uploaded_at": datetime.utcnow().isoformat()
+                "uploaded_at": datetime.utcnow().isoformat(),
+                "path": blob_name  # Include path for deletion purposes
             }
         except Exception as e:
             logger.error(f"Error uploading file {file.filename}: {str(e)}")
@@ -105,12 +106,13 @@ class StorageManager:
                     
                 files.append({
                     "id": blob.id,
-                    "name": blob.name.split('/')[-1],
+                    "name": blob.name.split('/')[-1],  # Get filename without path
+                    "path": blob.name,  # Full path including uploads/
                     "type": "file",
                     "size": f"{blob.size / 1024 / 1024:.2f} MB",
                     "owner": "You",
                     "lastModified": blob.updated.isoformat(),
-                    "url": blob.public_url
+                    "url": f"https://storage.googleapis.com/{self.bucket_name}/{blob.name}"
                 })
             
             return files
@@ -118,6 +120,17 @@ class StorageManager:
             logger.error(f"Error listing files: {str(e)}")
             logger.exception("Full traceback:")
             raise
+
+    def delete_file(self, file_path):
+        """Delete a file from the bucket"""
+        try:
+            blob = self.bucket.blob(file_path)
+            blob.delete()
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting file {file_path}: {str(e)}")
+            logger.exception("Full traceback:")
+            return False
 
 # Initialize storage manager
 storage_manager = StorageManager()
@@ -160,7 +173,10 @@ def get_files():
         })
     except Exception as e:
         logger.error(f"Error getting files: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
 
 @app.route("/upload-files", methods=["POST"])
 def upload_files():
@@ -198,19 +214,31 @@ def upload_files():
             "error": str(e)
         }), 500
 
-@app.route("/files/<path:filename>", methods=["DELETE"])
-def delete_file(filename):
+@app.route("/files/<path:file_path>", methods=["DELETE"])
+def delete_file(file_path):
     """Delete a file"""
     try:
-        blob = storage_manager.bucket.blob(f'uploads/{filename}')
-        blob.delete()
-        return jsonify({
-            "status": "success",
-            "message": f"File {filename} deleted successfully"
-        })
+        # Ensure the file_path starts with 'uploads/'
+        if not file_path.startswith('uploads/'):
+            file_path = f'uploads/{file_path}'
+
+        success = storage_manager.delete_file(file_path)
+        if success:
+            return jsonify({
+                "status": "success",
+                "message": f"File {file_path} deleted successfully"
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "error": "File not found or could not be deleted"
+            }), 404
     except Exception as e:
         logger.error(f"Error deleting file: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
