@@ -6,3 +6,12 @@ google-auth
 requests
 gunicorn
 Werkzeug
+langchain
+pinecone-client
+anthropic
+python-dotenv
+python-magic
+unstructured
+pdf2image
+pytesseract
+pypdf
