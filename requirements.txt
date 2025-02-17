@@ -15,3 +15,6 @@ unstructured
 pdf2image
 pytesseract
 pypdf
+fastapi
+uvicorn
+python-dotenv
